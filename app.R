@@ -2,6 +2,8 @@ library(shiny)
 
 ## first code created
 
+## I will like to add some few things to it
+
 ## lsets do this
 ui <- fluidPage(
   
