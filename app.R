@@ -2,163 +2,190 @@ library(shiny)
 library(DBI)
 library(RSQLite)
 library(bslib)
+library(DT)
 
-# 1. Database Connection (v6 to handle new independent columns)
-db_name <- "narcc_v6_final.sqlite"
+# 1. DATABASE INITIALIZATION
+db_name <- "narcc_v9_secure.sqlite"
 con <- dbConnect(SQLite(), db_name)
 
-# Create tables with independent state columns
+# Added 'narrative' column to the table schema
 dbExecute(con, "CREATE TABLE IF NOT EXISTS activities (
     id INTEGER PRIMARY KEY AUTOINCREMENT, 
-    code TEXT, name TEXT, country TEXT, 
+    code TEXT, 
+    name TEXT, 
+    focal_email TEXT, 
     is_approved TEXT, 
     is_completed TEXT, 
     is_reported TEXT, 
     is_retired TEXT, 
-    is_decommitted TEXT,
+    is_decommitted TEXT, 
+    narrative TEXT, 
     updated TEXT)")
 
-dbExecute(con, "CREATE TABLE IF NOT EXISTS logs (
-    id INTEGER PRIMARY KEY AUTOINCREMENT, 
-    act_id INTEGER, note TEXT, date TEXT)")
+dbExecute(con, "CREATE TABLE IF NOT EXISTS focal_registry (email TEXT PRIMARY KEY, added_date TEXT)")
 
-# 2. User Interface
+# 2. UI
 ui <- navbarPage(
-  title = "NARCC Activity Portal",
+  title = "NARCC Portal",
   theme = bs_theme(bootswatch = "flatly"),
   
-  # --- TAB 1: REGISTRATION ---
-  tabPanel("Register New Activity",
+  tabPanel("Update Status",
            fluidPage(
-             column(6, offset = 3,
+             column(8, offset = 2,
                     wellPanel(
-                      h3("Registration Form", style="border-bottom: 2px solid #2c3e50; padding-bottom: 10px;"),
-                      passwordInput("admin_pin", "Admin Authorization PIN"),
-                      textInput("reg_name", "Activity Title / Name"),
-                      textInput("reg_country", "Country of Implementation"),
-                      br(),
-                      actionButton("do_reg", "Create Activity Record", class = "btn-success", width = "100%")
+                      h3("Update Activity Status"),
+                      uiOutput("select_act_ui"),
+                      hr(),
+                      uiOutput("dynamic_update_fields")
                     )
              )
            )
   ),
   
-  # --- TAB 2: UPDATE STATUS ---
-  tabPanel("Update Activity Status",
+  tabPanel("Admin & Management",
            fluidPage(
              column(8, offset = 2,
                     wellPanel(
-                      h3("Activity Update Checklist", style="border-bottom: 2px solid #2c3e50; padding-bottom: 10px;"),
-                      uiOutput("select_act_ui"),
-                      hr(),
-                      
-                      # This panel only appears once an activity is selected
-                      conditionalPanel(
-                        condition = "input.sel_id != '' && input.sel_id != null",
-                        
-                        fluidRow(
-                          column(6,
-                                 radioButtons("u_appr", "1. Has this activity been approved?",
-                                              choices = c("No", "Yes"), inline = TRUE),
-                                 radioButtons("u_comp", "2. Has the activity been completed?",
-                                              choices = c("No", "Yes"), inline = TRUE),
-                                 radioButtons("u_repo", "3. Has the report been submitted?",
-                                              choices = c("No", "Yes"), inline = TRUE)
-                          ),
-                          column(6,
-                                 radioButtons("u_reti", "4. Has retirement been done?",
-                                              choices = c("No", "Yes"), inline = TRUE),
-                                 radioButtons("u_decom", "5. Has Finance decommitted the funds?",
-                                              choices = c("No", "Yes"), inline = TRUE)
-                          )
-                        ),
-                        
-                        hr(),
-                        textAreaInput("u_note", "Additional Progress Remarks", rows = 3, 
-                                      placeholder = "Enter details regarding any of the above..."),
-                        
-                        br(),
-                        actionButton("do_update", "Submit Official Status Update", 
-                                     class = "btn-primary btn-lg", width = "100%")
-                      )
+                      passwordInput("admin_pin", "Admin PIN"),
+                      uiOutput("admin_panel_ui")
                     )
              )
            )
   )
 )
 
-# 3. Server Logic
+# 3. SERVER
 server <- function(input, output, session) {
   refresh <- reactiveVal(0)
   
-  # --- Handle Registration ---
-  observeEvent(input$do_reg, {
-    pin <- Sys.getenv("MY_ADMIN_PIN")
-    if (pin == "") pin <- "1234"
-    
-    if (input$admin_pin != pin) {
-      showNotification("Incorrect PIN", type = "error")
-      return()
-    }
-    
-    req(input$reg_name, input$reg_country)
-    
-    tryCatch({
-      act_code <- paste0(toupper(substr(input$reg_country, 1, 3)), "-", sample(100:999, 1))
-      now <- format(Sys.time(), "%Y-%m-%d %H:%M")
-      
-      # Insert with default "No" for all 5 states
-      dbExecute(con, "INSERT INTO activities (code, name, country, is_approved, is_completed, is_reported, is_retired, is_decommitted, updated) 
-                VALUES (?,?,?,?,?,?,?,?,?)",
-                params = list(act_code, input$reg_name, input$reg_country, "No", "No", "No", "No", "No", now))
-      
-      refresh(refresh() + 1)
-      showNotification("Activity Registered!", type = "message")
-      
-      updateTextInput(session, "reg_name", value = "")
-      updateTextInput(session, "reg_country", value = "")
-      updateTextInput(session, "admin_pin", value = "") 
-      
-    }, error = function(e) {
-      showNotification(paste("Database Error:", e$message), type = "error")
-    })
+  # --- Admin & Export ---
+  output$admin_panel_ui <- renderUI({
+    if (is.null(input$admin_pin) || input$admin_pin != "1234") return(helpText("Enter PIN (given)"))
+    tagList(
+      navset_card_pill(
+        nav_panel("Registration",
+                  br(),
+                  textInput("reg_code", "Code"),
+                  textInput("reg_name", "Title"),
+                  uiOutput("focal_dropdown_ui"),
+                  actionButton("do_reg", "Register Activity", class = "btn-success", width = "100%")
+        ),
+        nav_panel("Focal Persons",
+                  br(),
+                  textInput("new_email", "Authorize Email"),
+                  actionButton("add_email", "Add to Registry", class = "btn-info"),
+                  hr(),
+                  DTOutput("email_table")
+        ),
+        nav_panel("Power BI Push",
+                  br(),
+                  h4("Manual Data Synchronization"),
+                  p("Clicking the button below will generate the 'NARCC_Master_Data.csv' file."),
+                  actionButton("push_csv", "Push Data to Power BI (CSV)", class = "btn-danger", icon = icon("share-from-square"), width = "100%")
+        )
+      )
+    )
   })
   
-  # --- Generate Search Dropdown ---
   output$select_act_ui <- renderUI({
     refresh()
-    df <- dbGetQuery(con, "SELECT id, name, country FROM activities")
-    if(nrow(df) == 0) return(helpText("No activities registered yet."))
-    
-    choices <- setNames(df$id, paste(df$country, "-", df$name))
-    selectizeInput("sel_id", "Search and Select Activity to Update", choices = c("Select..." = "", choices))
+    df <- dbGetQuery(con, "SELECT id, code, name FROM activities")
+    choices <- setNames(df$id, paste0(df$code, " - ", df$name))
+    selectInput("sel_id", "Choose Activity", choices = c(" " = "", choices))
   })
   
-  # --- Handle Updates ---
-  observeEvent(input$do_update, {
+  output$dynamic_update_fields <- renderUI({
     req(input$sel_id)
-    now <- format(Sys.time(), "%Y-%m-%d %H:%M")
+    if(input$sel_id == "") return(NULL)
     
-    tryCatch({
-      dbExecute(con, "UPDATE activities SET 
-                is_approved=?, is_completed=?, is_reported=?, is_retired=?, is_decommitted=?, updated=? 
-                WHERE id=?",
-                params = list(input$u_appr, input$u_comp, input$u_repo, input$u_reti, input$u_decom, now, input$sel_id))
-      
-      if(nchar(input$u_note) > 0) {
-        dbExecute(con, "INSERT INTO logs (act_id, note, date) VALUES (?,?,?)",
-                  params = list(input$sel_id, input$u_note, now))
-      }
-      
-      showNotification("Update Saved Successfully", type = "message")
-      
-      # Reset form
-      updateSelectizeInput(session, "sel_id", selected = "")
-      updateTextAreaInput(session, "u_note", value = "")
-      
-    }, error = function(e) {
-      showNotification(paste("Update Failed:", e$message), type = "error")
-    })
+    curr <- dbGetQuery(con, "SELECT * FROM activities WHERE id = ?", list(input$sel_id))
+    
+    get_sel <- function(val) {
+      if (is.null(val) || is.na(val) || val == "" || val == "NA") return(character(0))
+      return(val)
+    }
+    
+    tagList(
+      fluidRow(
+        column(6,
+               radioButtons("u_appr", "Approved?", c("No", "Yes"), selected = get_sel(curr$is_approved), inline = TRUE),
+               radioButtons("u_comp", "Completed?", c("No", "Yes"), selected = get_sel(curr$is_completed), inline = TRUE),
+               radioButtons("u_repo", "Reported?", c("No", "Yes"), selected = get_sel(curr$is_reported), inline = TRUE)
+        ),
+        column(6,
+               radioButtons("u_reti", "Retired?", c("No", "Yes"), selected = get_sel(curr$is_retired), inline = TRUE),
+               radioButtons("u_decom", "Decommitted?", c("No", "Yes"), selected = get_sel(curr$is_decommitted), inline = TRUE)
+        )
+      ),
+      hr(),
+      # --- NARRATIVE/COMMENT SECTION ---
+      textAreaInput("u_note", "Narrative/Comments", value = ifelse(is.na(curr$narrative), "", curr$narrative), rows = 3),
+      passwordInput("u_auth_email", "Verify Your Email"),
+      actionButton("do_update", "Submit Update", class = "btn-primary", width = "100%")
+    )
+  })
+  
+  observeEvent(input$do_update, {
+    # 1. VALIDATE EMAIL
+    act <- dbGetQuery(con, "SELECT focal_email FROM activities WHERE id = ?", list(input$sel_id))
+    if (tolower(trimws(input$u_auth_email)) != tolower(act$focal_email)) {
+      return(showNotification("Email Mismatch", type = "error"))
+    }
+    
+    # 2. CONVERT NULLS TO "NA"
+    safe_val <- function(x) { if(is.null(x)) return("NA") else return(x) }
+    
+    # 3. UPDATE DB (Including narrative)
+    dbExecute(con, "UPDATE activities SET is_approved=?, is_completed=?, is_reported=?, is_retired=?, is_decommitted=?, narrative=?, updated=? WHERE id=?",
+              list(
+                safe_val(input$u_appr), 
+                safe_val(input$u_comp), 
+                safe_val(input$u_repo), 
+                safe_val(input$u_reti), 
+                safe_val(input$u_decom), 
+                input$u_note, 
+                as.character(Sys.time()), 
+                input$sel_id
+              ))
+    
+    freezeReactiveValue(input, "sel_id")
+    updateSelectInput(session, "sel_id", selected = "")
+    
+    showNotification("Database Updated Successfully")
+    refresh(refresh() + 1)
+  })
+  
+  # --- ADMIN ACTIONS ---
+  observeEvent(input$do_reg, {
+    dbExecute(con, "INSERT INTO activities (code, name, focal_email, is_approved, is_completed, is_reported, is_retired, is_decommitted, narrative, updated) VALUES (?,?,?,?,?,?,?,?,?,?)",
+              list(input$reg_code, input$reg_name, tolower(input$reg_focal_email), "NA", "NA", "NA", "NA", "NA", "", as.character(Sys.time())))
+    updateTextInput(session, "reg_code", value = "")
+    updateTextInput(session, "reg_name", value = "")
+    refresh(refresh() + 1)
+    showNotification("Registered Successfully")
+  })
+  
+  observeEvent(input$push_csv, {
+    d <- dbGetQuery(con, "SELECT * FROM activities")
+    write.csv(d, "NARCC_Master_Data.csv", row.names = FALSE)
+    showNotification("CSV Refreshed", type = "message")
+  })
+  
+  observeEvent(input$add_email, {
+    dbExecute(con, "INSERT OR IGNORE INTO focal_registry VALUES (?,?)", list(tolower(input$new_email), as.character(Sys.Date())))
+    updateTextInput(session, "new_email", value = "")
+    refresh(refresh() + 1)
+  })
+  
+  output$email_table <- renderDT({
+    refresh()
+    datatable(dbGetQuery(con, "SELECT * FROM focal_registry"), selection = 'single')
+  })
+  
+  output$focal_dropdown_ui <- renderUI({
+    refresh()
+    emails <- dbGetQuery(con, "SELECT email FROM focal_registry")$email
+    selectInput("reg_focal_email", "Assign Focal Person", choices = emails)
   })
 }
 
