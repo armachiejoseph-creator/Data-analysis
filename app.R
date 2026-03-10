@@ -5,7 +5,7 @@ library(RSQLite)
 library(DT)
 library(dplyr)
 library(readxl)
-library(openxlsx) # Added for Backup functionality
+library(openxlsx) # Added for Backup functionalityvd
 
 # --- 1. DATABASE SETUP (pirs_db_v1) ---
 db_name <- "pirs_db_v1.sqlite"
