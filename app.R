@@ -1,256 +1,313 @@
 library(shiny)
-library(bslib)
 library(DBI)
 library(RSQLite)
+library(bslib)
 library(DT)
+library(plotly)
 library(dplyr)
-library(readxl)
-library(openxlsx) # Added for Backup functionalityvd
-
-# --- 1. DATABASE SETUP (pirs_db_v1) ---
-db_name <- "pirs_db_v1.sqlite"
-con <- dbConnect(SQLite(), db_name)
-cdc_colors <- list(green = "#006838", yellow = "#FDB913", bg = "#f8f9fa")
-
-# Create the 16-column table + Audit/User tables
-dbExecute(con, "CREATE TABLE IF NOT EXISTS pirs_db (
-  division_name TEXT, priority_area TEXT, goal TEXT, objective TEXT, id TEXT PRIMARY KEY, 
-  indicator_name TEXT, results_level TEXT, indicator_tier TEXT, indicator_type TEXT, 
-  rationale TEXT, Calculation_type TEXT, definition TEXT, Disaggregation TEXT, 
-  Numerator TEXT, Denominator TEXT, similar_indicators TEXT, 
-  frequency TEXT, collection_method TEXT, last_updated TEXT
-)")
-
-dbExecute(con, "CREATE TABLE IF NOT EXISTS audit_log (
-  indicator_id TEXT, field_name TEXT, old_value TEXT, new_value TEXT, changed_by TEXT, change_time TEXT
-)")
-
-dbExecute(con, "CREATE TABLE IF NOT EXISTS users (username TEXT, role TEXT, email TEXT PRIMARY KEY)")
-dbExecute(con, "INSERT OR IGNORE INTO users VALUES ('Admin', 'Admin', 'admin@moh.gov')")
-
-# --- 2. UI ---
-ui <- page_navbar(
-  title = "Africa CDC | Strategic PIRS",
-  id = "main_nav",
-  position = "fixed-top", 
-  theme = bs_theme(bootswatch = "flatly", primary = cdc_colors$green, secondary = cdc_colors$yellow),
+#dt
+# --- 1. STRATEGIC UNIVERSE DATA FUNCTION (UNTOUCHED) ---
+generate_complete_system <- function() {
+  sun <- data.frame(x=0, y=0, z=0, label="VISION 2027", size=60, color="gold", type="Sun",
+                    info="<b>VISION 2027</b><br>A safer, healthier, and prosperous Africa.")
   
-  header = tagList(
-    tags$style(HTML("
-      body { padding-top: 100px !important; background-color: #f8f9fa; }
-      .card-pirs { border-left: 10px solid #006838; margin-bottom: 25px; font-size: 0.85rem; }
-      .section-title { color: #006838; font-weight: bold; border-bottom: 1px solid #eee; margin-bottom: 15px; margin-top: 20px; }
-      .card-label { font-weight: bold; color: #555; text-transform: uppercase; font-size: 0.7rem; display: block; margin-top: 5px; }
-      textarea { resize: both !important; min-height: 80px; width: 100%; }
-      .hist-link { font-size: 0.72rem; float: right; color: #006838; text-decoration: underline; cursor: pointer; font-weight: normal; }
-    ")),
-    tags$script(HTML("$(document).on('click', '.edit-btn', function() { Shiny.setInputValue('card_id_trigger', this.id, {priority: 'event'}); });"))
-  ),
-  
-  nav_panel("Gallery Registry", 
-            div(style = "max-width: 1500px; margin: auto; padding: 15px;",
-                layout_column_wrap(width = 1/2,
-                                   selectInput("f_tier", "Filter by Tier:", choices = c("All", "tier 1", "tier 2", "tier 3", "tier 4")),
-                                   textInput("f_search", "Search Code/Name:")
-                ),
-                uiOutput("gallery_ui")
-            )
-  ),
-  nav_panel("Editor", div(style = "max-width: 1000px; margin: auto; padding-bottom: 50px;", uiOutput("edit_form_ui"))),
-  nav_spacer(),
-  nav_item(actionButton("btn_admin_login", "Staff Management", class="btn-outline-secondary"))
-)
-
-# --- 3. SERVER ---
-server <- function(input, output, session) {
-  editing_id <- reactiveVal(NULL)
-  refresh_val <- reactiveVal(0)
-  is_admin <- reactiveVal(FALSE)
-  
-  safe_diff <- function(a, b) {
-    if (is.na(a)) a <- ""
-    if (is.na(b)) b <- ""
-    return(as.character(a) != as.character(b))
-  }
-  
-  show_hist <- function(label, db_field) {
-    logs <- dbGetQuery(con, "SELECT old_value, new_value, changed_by, change_time FROM audit_log WHERE indicator_id = ? AND field_name = ? ORDER BY change_time DESC", list(editing_id(), db_field))
-    showModal(modalDialog(title = paste("History:", label), if(nrow(logs)==0) "No history recorded." else renderTable(logs), easyClose = TRUE, size = "l"))
-  }
-  
-  # Exhaustive History Observers
-  obs_fields <- list(
-    "h_div"="division_name", "h_area"="priority_area", "h_goal"="goal", "h_obj"="objective", 
-    "h_name"="indicator_name", "h_def"="definition", "h_rat"="rationale", "h_calc"="Calculation_type", 
-    "h_dis"="Disaggregation", "h_num"="Numerator", "h_den"="Denominator", "h_tier"="indicator_tier", 
-    "h_level"="results_level", "h_freq"="frequency", "h_meth"="collection_method", 
-    "h_type"="indicator_type", "h_sim"="similar_indicators"
-  )
-  lapply(names(obs_fields), function(id) { observeEvent(input[[id]], { show_hist(obs_fields[[id]], obs_fields[[id]]) }) })
-  
-  # --- GALLERY (SHOW ALL 16 FIELDS) ---
-  output$gallery_ui <- renderUI({
-    refresh_val()
-    data <- dbGetQuery(con, "SELECT * FROM pirs_db")
-    if(nrow(data) == 0) return(h3("No data. Use Admin tab to Reset/Upload Excel."))
-    if(input$f_tier != "All") data <- data %>% filter(indicator_tier == input$f_tier)
-    if(nzchar(input$f_search)) data <- data %>% filter(grepl(input$f_search, indicator_name, ignore.case=T) | grepl(input$f_search, id, ignore.case=T))
-    
-    lapply(1:nrow(data), function(i) {
-      card(class = "card-pirs",
-           card_header(div(style="display:flex; justify-content:space-between; align-items:center;", 
-                           tags$b(data$id[i]), span(class="badge bg-warning text-dark", data$indicator_tier[i]))),
-           div(style="padding:10px;",
-               h5(style="color:#006838; font-weight:bold;", data$indicator_name[i]),
-               layout_column_wrap(width = 1/4,
-                                  div(span(class="card-label", "Division"), data$division_name[i]),
-                                  div(span(class="card-label", "Area"), data$priority_area[i]),
-                                  div(span(class="card-label", "Frequency"), data$frequency[i]),
-                                  div(span(class="card-label", "Level"), data$results_level[i])
-               ),
-               hr(),
-               layout_column_wrap(width = 1/2,
-                                  div(span(class="card-label", "Goal"), data$goal[i]),
-                                  div(span(class="card-label", "Objective"), data$objective[i])
-               ),
-               layout_column_wrap(width = 1/3,
-                                  div(span(class="card-label", "Numerator"), data$Numerator[i]),
-                                  div(span(class="card-label", "Denominator"), data$Denominator[i]),
-                                  div(span(class="card-label", "Calculation"), data$Calculation_type[i])
-               ),
-               span(class="card-label", "Definition"), p(data$definition[i]),
-               span(class="card-label", "Rationale"), p(data$rationale[i]),
-               span(class="card-label", "Disaggregation"), p(data$Disaggregation[i]),
-               layout_column_wrap(width = 1/2,
-                                  div(span(class="card-label", "Type"), data$indicator_type[i]),
-                                  div(span(class="card-label", "Similar Indicators"), data$similar_indicators[i])
-               )
-           ),
-           card_footer(actionButton(data$id[i], "Edit Details", class="btn-sm btn-primary edit-btn"))
-      )
-    })
-  })
-  
-  # --- EDITOR (ALL 16 FIELDS) ---
-  output$edit_form_ui <- renderUI({
-    req(editing_id())
-    curr <- dbGetQuery(con, "SELECT * FROM pirs_db WHERE id = ?", list(editing_id()))
-    card(
-      card_header(paste("Reference Sheet:", editing_id())),
-      h6(class="section-title", "1. Strategic Alignment"),
-      layout_column_wrap(width = 1/2, 
-                         div(actionLink("h_div", "History", class="hist-link"), textAreaInput("u_div", "Division", curr$division_name)), 
-                         div(actionLink("h_area", "History", class="hist-link"), textAreaInput("u_area", "Area", curr$priority_area))),
-      layout_column_wrap(width = 1/2, 
-                         div(actionLink("h_goal", "History", class="hist-link"), textAreaInput("u_goal", "Goal", curr$goal)), 
-                         div(actionLink("h_obj", "History", class="hist-link"), textAreaInput("u_obj", "Objective", curr$objective))),
-      h6(class="section-title", "2. Technical & Metrics"),
-      div(actionLink("h_name", "History", class="hist-link"), textAreaInput("u_name", "Indicator Name", curr$indicator_name)),
-      div(actionLink("h_def", "History", class="hist-link"), textAreaInput("u_def", "Definition", curr$definition)),
-      div(actionLink("h_rat", "History", class="hist-link"), textAreaInput("u_rat", "Rationale", curr$rationale)),
-      layout_column_wrap(width = 1/3,
-                         div(actionLink("h_tier", "History", class="hist-link"), textAreaInput("u_tier", "Tier", curr$indicator_tier)),
-                         div(actionLink("h_level", "History", class="hist-link"), textAreaInput("u_level", "Level", curr$results_level)),
-                         div(actionLink("h_freq", "History", class="hist-link"), textAreaInput("u_freq", "Frequency", curr$frequency))),
-      layout_column_wrap(width = 1/2, 
-                         div(actionLink("h_num", "History", class="hist-link"), textAreaInput("u_num", "Numerator", curr$Numerator)), 
-                         div(actionLink("h_den", "History", class="hist-link"), textAreaInput("u_den", "Denominator", curr$Denominator))),
-      layout_column_wrap(width = 1/2,
-                         div(actionLink("h_calc", "History", class="hist-link"), textAreaInput("u_calc", "Calculation Type", curr$Calculation_type)),
-                         div(actionLink("h_dis", "History", class="hist-link"), textAreaInput("u_dis", "Disaggregation", curr$Disaggregation))),
-      h6(class="section-title", "3. Metadata"),
-      div(actionLink("h_sim", "History", class="hist-link"), textAreaInput("u_sim", "Similar Indicators", curr$similar_indicators)),
-      div(actionLink("h_type", "History", class="hist-link"), textAreaInput("u_type", "Indicator Type", curr$indicator_type)),
-      hr(),
-      textInput("check_email", "Authorized Email:", value = "enter your email"),
-      card_footer(div(style="float:right", actionButton("save_changes", "Save & Audit", class="btn-success")))
+  planets <- data.frame(
+    id = 1:13,
+    label = c("P1: Disease Control", "P2: Surveillance", "P3: Emergency EPR", 
+              "P4: NPHI Support", "P5: Lab Systems", "P6: Manufacturing",
+              "E1: Digital", "E2: Workforce", "E3: Financing", "E4: Research", 
+              "E5: Partnerships", "E6: RCCs", "E7: Governance"),
+    r = c(rep(30, 6), rep(18, 7)),
+    color = c(rep("#1E90FF", 6), rep("#FF4500", 7)),
+    type = c(rep("Priority", 6), rep("Enabler", 7)),
+    info = c(
+      "Strengthen health systems to prevent and control high-burden diseases.",
+      "Strengthen integrated surveillance and early warning systems.",
+      "Ensure resilient health systems for emergency preparedness and response.",
+      "Empower National Public Health Institutes (NPHIs) to lead core functions.",
+      "Expand clinical and public health laboratory systems and networks.",
+      "Expand health product innovation and local manufacturing.",
+      "Incorporate digital and innovative health approaches.",
+      "Attract and grow a best-in-class African public health workforce.",
+      "Secure sustainable financial resources and resource allocation.",
+      "Strengthen public health research and innovation for decision-making.",
+      "Foster respectful partnerships and community engagement.",
+      "Enhance Africa CDC's regional and in-country presence.",
+      "Strengthen governance, leadership, and accountable processes."
     )
-  })
-  
-  # --- SAVE LOGIC (SYNCED TO ALL 16 FIELDS) ---
-  observeEvent(input$save_changes, {
-    user <- dbGetQuery(con, "SELECT username FROM users WHERE LOWER(email) = LOWER(?)", list(trimws(input$check_email)))
-    if(nrow(user) == 0) { showNotification("Unauthorized", type = "error"); return() }
-    old <- dbGetQuery(con, "SELECT * FROM pirs_db WHERE id = ?", list(editing_id()))
-    now <- format(Sys.time(), "%Y-%m-%d %H:%M:%S")
-    fields <- list(
-      "division_name"="u_div", "priority_area"="u_area", "goal"="u_goal", "objective"="u_obj",
-      "indicator_name"="u_name", "definition"="u_def", "rationale"="u_rat", "indicator_tier"="u_tier",
-      "results_level"="u_level", "frequency"="u_freq", "Numerator"="u_num", "Denominator"="u_den",
-      "Calculation_type"="u_calc", "Disaggregation"="u_dis", "similar_indicators"="u_sim", "indicator_type"="u_type"
-    )
-    dbBegin(con)
-    tryCatch({
-      for(f in names(fields)) {
-        if(safe_diff(input[[fields[[f]]]], old[[f]])) {
-          dbExecute(con, "INSERT INTO audit_log VALUES (?, ?, ?, ?, ?, ?)", list(editing_id(), f, old[[f]], input[[fields[[f]]]], user$username[1], now))
-        }
-      }
-      dbExecute(con, "UPDATE pirs_db SET division_name=?, priority_area=?, goal=?, objective=?, indicator_name=?, definition=?, rationale=?, indicator_tier=?, results_level=?, frequency=?, Numerator=?, Denominator=?, Calculation_type=?, Disaggregation=?, similar_indicators=?, indicator_type=?, last_updated=? WHERE id=?",
-                list(input$u_div, input$u_area, input$u_goal, input$u_obj, input$u_name, input$u_def, input$u_rat, input$u_tier, input$u_level, input$u_freq, input$u_num, input$u_den, input$u_calc, input$u_dis, input$u_sim, input$u_type, now, editing_id()))
-      dbCommit(con); refresh_val(refresh_val() + 1); showNotification("Success"); nav_select("main_nav", "Gallery Registry")
-    }, error = function(e) { dbRollback(con); showNotification(paste("Save Error:", e$message), type="error") })
-  })
-  
-  # --- ADMIN LOGIN LOGIC (ENVIRONMENT VARIABLE PICKUP) ---
-  observeEvent(input$btn_admin_login, { 
-    showModal(modalDialog(passwordInput("ap", "Enter Admin Code"), footer=actionButton("do_al", "Login"))) 
-  })
-  
-  observeEvent(input$do_al, { 
-    # Fetching secret from environment
-    admin_secret <- Sys.getenv("PIRS_ADMIN_CODE")
-    
-    # Check if set
-    if (admin_secret == "") {
-      showNotification("Error: PIRS_ADMIN_CODE env var is empty.", type = "error")
-      return()
-    }
-    
-    if(input$ap == admin_secret) { 
-      is_admin(TRUE)
-      removeModal() 
-      showNotification("Admin Access Granted", type = "message")
-    } else {
-      showNotification("Incorrect Code", type = "error")
-    }
-  })
-  
-  observe({ 
-    if(is_admin()) nav_insert("main_nav", target="Editor", nav_panel("Admin", 
-                                                                     card(card_header("Database Management"),
-                                                                          layout_column_wrap(width = 1/2,
-                                                                                             fileInput("m_file", "1. Upload Excel for Reset", accept = ".xlsx"),
-                                                                                             downloadButton("download_backup", "2. Download Current Backup", class = "btn-info")),
-                                                                          actionButton("do_reset", "Execute Hard Reset (Deletes Old Data)", class="btn-danger", width="100%")),
-                                                                     card(card_header("Users"), textInput("nu_n", "Name"), textInput("nu_e", "Email"), actionButton("su", "Add User"), hr(), DTOutput("st")))) 
-  })
-  
-  output$download_backup <- downloadHandler(
-    filename = function() { paste0("Africa_CDC_PIRS_Backup_", format(Sys.time(), "%Y%m%d_%H%M"), ".xlsx") },
-    content = function(file) {
-      export_data <- dbGetQuery(con, "SELECT * FROM pirs_db")
-      cols <- c("division_name", "priority_area", "goal", "objective", "id", "indicator_name", "results_level", "indicator_tier", "indicator_type", "rationale", "Calculation_type", "definition", "Disaggregation", "Numerator", "Denominator", "similar_indicators")
-      write.xlsx(export_data[, cols], file, rowNames = FALSE)
-    }
+  ) %>% mutate(
+    theta = seq(0, 2*pi, length.out=14)[id],
+    x = r*cos(theta), y = r*sin(theta), z = runif(13, -5, 5), size = 40
   )
   
-  observeEvent(input$do_reset, {
-    req(input$m_file)
-    df <- read_excel(input$m_file$datapath)
-    df[] <- lapply(df, as.character)
-    cols <- c("division_name", "priority_area", "goal", "objective", "id", "indicator_name", "results_level", "indicator_tier", "indicator_type", "rationale", "Calculation_type", "definition", "Disaggregation", "Numerator", "Denominator", "similar_indicators")
-    dbBegin(con)
-    tryCatch({
-      dbExecute(con, "DELETE FROM pirs_db")
-      dbWriteTable(con, "pirs_db", df[, cols], append = TRUE)
-      dbCommit(con); refresh_val(refresh_val()+1); showNotification("Reset Done")
-    }, error = function(e) { dbRollback(con); showNotification("Reset Error: Check Columns", type="error") })
-  })
+  obj_data <- list(
+    # P1
+    list(l="P1.1: Integrated Strategies", p=1, t=1, d="Addressing RMNCH, NTDs, NCDs, and mental health."), 
+    list(l="P1.2: One Health Actions", p=1, t=1, d="Establishing multi-sectoral actions for disease management."), 
+    list(l="P1.3: Access to Med-Tech", p=1, t=1, d="Improving access to essential medical technologies."),
+    # P2
+    list(l="P2.1: Real-time systems", p=2, t=2, d="Establishing real-time disease and event reporting systems."), 
+    list(l="P2.2: One Health Surveillance", p=2, t=2, d="Integrating human, animal, and environmental data."), 
+    list(l="P2.3: AMR Control", p=2, t=2, d="Implementing strategies to control antimicrobial resistance."), 
+    list(l="P2.4: Predictive Analytics", p=2, t=2, d="Utilizing advanced modeling to forecast outbreaks."), 
+    list(l="P2.5: Information Systems", p=2, t=2, d="Building digital architecture for secure data exchange."),
+    # P3
+    list(l="P3.1: Prevention/Prep", p=3, t=3, d="Strengthening prevention and preparedness at all levels."), 
+    list(l="P3.2: Response/Recovery", p=3, t=3, d="Building robust response and recovery capabilities."), 
+    list(l="P3.3: Cross-border Coord", p=3, t=3, d="Facilitating coordination across geographic boundaries."),
+    # P4
+    list(l="P4.1: Legal Establishment", p=4, t=4, d="Supporting legal establishment and mandates for NPHIs."), 
+    list(l="P4.2: Operational Standards", p=4, t=4, d="Bolstering NPHI functionality to a common standard."), 
+    list(l="P4.3: NPHI Collaboration", p=4, t=4, d="Establishing networks for shared learning and resources."), 
+    list(l="P4.4: Centers of Excellence", p=4, t=4, d="Supporting regional hubs for research and training."),
+    # P5
+    list(l="P5.1: Lab Governance", p=5, t=5, d="Strengthening laboratory infrastructure and governance."), 
+    list(l="P5.2: Diagnostic Access", p=5, t=5, d="Improving timely disease detection via diagnostics."), 
+    list(l="P5.3: Genomic/Molecular Cap", p=5, t=5, d="Enhancing genomics and bioinformatics capacity."), 
+    list(l="P5.4: Lab Network Optimization", p=5, t=5, d="Mapping networks for efficient information sharing."),
+    # P6
+    list(l="P6.1: Local Capacity/Infra", p=6, t=6, d="Scaling infrastructure for local vaccine production."), 
+    list(l="P6.2: Market Intelligence", p=6, t=6, d="Providing data-driven insights for market design."), 
+    list(l="P6.3: R&D Ecosystem", p=6, t=6, d="Strengthening local R&D and technology transfer."), 
+    list(l="P6.4: Investment/Partnership", p=6, t=6, d="Attracting investments for a self-reliant industry."),
+    # E1
+    list(l="E1.1: Digital Strategies", p=7, t=c(2, 3, 5), d="Implementing tailored digital health strategies."), 
+    list(l="E1.2: Data Governance", p=7, t=c(2, 3, 5), d="Developing frameworks for data interoperability."), 
+    list(l="E1.3: Health Informatics", p=7, t=c(2, 3, 5), d="Fostering innovations to meet specific challenges."),
+    # E2
+    list(l="E2.1: Training Programs", p=8, t=c(1, 2, 3, 4), d="Executing epidemiology and leadership training."), 
+    list(l="E2.2: Scholarships/Fellowships", p=8, t=c(1, 2, 3, 4), d="Growing a specialized technical workforce."), 
+    list(l="E2.3: CHW Institutionalization", p=8, t=c(1, 2, 3, 4), d="Formalizing community health workers."),
+    # E3
+    list(l="E3.1: Needs Analysis", p=9, t=c(3, 6), d="Conducting financial needs assessments."), 
+    list(l="E3.2: Domestic Health Finance", p=9, t=c(3, 6), d="Advocating for domestic budget allocations."), 
+    list(l="E3.3: Funding Coordination", p=9, t=c(3, 6), d="Aligning partner resources for sustainability."),
+    # E4
+    list(l="E4.1: Research Agenda", p=10, t=c(1, 5), d="Setting continental priorities for health research."), 
+    list(l="E4.2: Research Ecosystem", p=10, t=c(1, 5), d="Strengthening institutional capacity for trials."), 
+    list(l="E4.3: Policy Guidance", p=10, t=c(1, 5), d="Translating research into actionable policy."),
+    # E5
+    list(l="E5.1: Partner Onboarding", p=11, t=c(4, 6), d="Managing strategic alliances and global peers."), 
+    list(l="E5.2: Community Engagement", p=11, t=c(4, 6), d="Active community participation in health planning."),
+    # E6
+    list(l="E6.1: Regional Priority Alignment", p=12, t=c(2, 3, 4), d="Aligning activities with regional economic needs."), 
+    list(l="E6.2: In-country presence", p=12, t=c(2, 3, 4), d="Strengthening the technical footprint in Member States."),
+    # E7
+    list(l="E7.1: Accountability/Transparency", p=13, t=1:6, d="Streamlining governance for clear accountability."), 
+    list(l="E7.2: Digitized Operations", p=13, t=1:6, d="Using digital tools to optimize efficiency."), 
+    list(l="E7.3: Africa CDC Workforce", p=13, t=1:6, d="Attracting and retaining high-caliber talent.")
+  )
   
-  output$st <- renderDT({ refresh_val(); datatable(dbGetQuery(con, "SELECT username, email FROM users")) })
-  observeEvent(input$su, { dbExecute(con, "INSERT INTO users VALUES (?, 'User', ?)", list(input$nu_n, input$nu_e)); refresh_val(refresh_val()+1) })
-  observeEvent(input$card_id_trigger, { editing_id(input$card_id_trigger); nav_select("main_nav", "Editor") })
+  moons <- lapply(obj_data, function(o) {
+    p_node <- planets[planets$id == o$p, ]
+    m_theta = runif(1, 0, 2*pi)
+    data.frame(
+      label = o$l, parent_id = o$p, targets = paste(o$t, collapse=","),
+      mx = p_node$x + 4*cos(m_theta), my = p_node$y + 4*sin(m_theta), mz = p_node$z + runif(1, -2, 2),
+      px = p_node$x, py = p_node$y, pz = p_node$z, size = 15, color = "#ADFF2F",
+      info = paste0("<b>Objective:</b> ", o$l, "<br><b>Focus:</b> ", o$d)
+    )
+  }) %>% bind_rows()
+  
+  return(list(sun=sun, planets=planets, moons=moons))
 }
 
+# --- 2. DATABASE INITIALIZATION ---
+db_name <- "narcc_v9_secure.sqlite"
+con <- dbConnect(SQLite(), db_name)
+
+dbExecute(con, "CREATE TABLE IF NOT EXISTS activities (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, 
+    code TEXT, 
+    name TEXT, 
+    focal_email TEXT, 
+    is_approved TEXT, 
+    is_completed TEXT, 
+    is_reported TEXT, 
+    is_retired TEXT, 
+    is_decommitted TEXT, 
+    narrative TEXT, 
+    updated TEXT)")
+
+dbExecute(con, "CREATE TABLE IF NOT EXISTS focal_registry (email TEXT PRIMARY KEY, added_date TEXT)")
+
+# --- 3. UI ---
+ui <- navbarPage(
+  title = "NARCC Portal",
+  theme = bs_theme(bootswatch = "flatly"),
+  
+  # 1st Tab: Activity Tracker
+  tabPanel("Update Status",
+           fluidPage(
+             column(8, offset = 2,
+                    wellPanel(
+                      h3("Update Activity Status"),
+                      uiOutput("select_act_ui"),
+                      hr(),
+                      uiOutput("dynamic_update_fields")
+                    )
+             )
+           )
+  ),
+  
+  # 2nd Tab: Admin Panel
+  tabPanel("Admin & Management",
+           fluidPage(
+             column(8, offset = 2,
+                    wellPanel(
+                      passwordInput("admin_pin", "Admin PIN"),
+                      uiOutput("admin_panel_ui")
+                    )
+             )
+           )
+  ),
+  
+  # 3rd Tab: Strategic Universe (LAST)
+  tabPanel("Strategic Universe",
+           fluidPage(
+             theme = bslib::bs_theme(bootswatch = "darkly"),
+             sidebarLayout(
+               sidebarPanel(
+                 h4("Objective Details"),
+                 uiOutput("selection_text"),
+                 hr(),
+                 helpText("Click on any Moon (green circle) to trigger the path mapping.")
+               ),
+               mainPanel(plotlyOutput("universe", height = "900px"))
+             )
+           )
+  )
+)
+
+# --- 4. SERVER ---
+server <- function(input, output, session) {
+  refresh <- reactiveVal(0)
+  data_master <- generate_complete_system()
+  selected_click <- reactiveVal("None")
+  
+  # --- NARCC TRACKER LOGIC ---
+  output$select_act_ui <- renderUI({
+    refresh()
+    df <- dbGetQuery(con, "SELECT id, code, name FROM activities")
+    choices <- setNames(df$id, paste0(df$code, " - ", df$name))
+    selectInput("sel_id", "Choose Activity", choices = c(" " = "", choices))
+  })
+  
+  output$dynamic_update_fields <- renderUI({
+    req(input$sel_id)
+    if(input$sel_id == "") return(NULL)
+    curr <- dbGetQuery(con, "SELECT * FROM activities WHERE id = ?", list(input$sel_id))
+    get_sel <- function(val) { if (is.null(val) || is.na(val) || val == "" || val == "NA") return(character(0)) else return(val) }
+    
+    tagList(
+      fluidRow(
+        column(6,
+               radioButtons("u_appr", "Approved?", c("No", "Yes"), selected = get_sel(curr$is_approved), inline = TRUE),
+               radioButtons("u_comp", "Completed?", c("No", "Yes"), selected = get_sel(curr$is_completed), inline = TRUE),
+               radioButtons("u_repo", "Reported?", c("No", "Yes"), selected = get_sel(curr$is_reported), inline = TRUE)
+        ),
+        column(6,
+               radioButtons("u_reti", "Retired?", c("No", "Yes"), selected = get_sel(curr$is_retired), inline = TRUE),
+               radioButtons("u_decom", "Decommitted?", c("No", "Yes"), selected = get_sel(curr$is_decommitted), inline = TRUE)
+        )
+      ),
+      hr(),
+      textAreaInput("u_note", "Narrative/Comments", value = ifelse(is.na(curr$narrative), "", curr$narrative), rows = 3),
+      passwordInput("u_auth_email", "Verify Your Email"),
+      actionButton("do_update", "Submit Update", class = "btn-primary", width = "100%")
+    )
+  })
+  
+  observeEvent(input$do_update, {
+    act <- dbGetQuery(con, "SELECT focal_email FROM activities WHERE id = ?", list(input$sel_id))
+    if (tolower(trimws(input$u_auth_email)) != tolower(act$focal_email)) return(showNotification("Email Mismatch", type = "error"))
+    safe_val <- function(x) { if(is.null(x)) return("NA") else return(x) }
+    
+    dbExecute(con, "UPDATE activities SET is_approved=?, is_completed=?, is_reported=?, is_retired=?, is_decommitted=?, narrative=?, updated=? WHERE id=?",
+              list(safe_val(input$u_appr), safe_val(input$u_comp), safe_val(input$u_repo), safe_val(input$u_reti), 
+                   safe_val(input$u_decom), input$u_note, as.character(Sys.time()), input$sel_id))
+    updateSelectInput(session, "sel_id", selected = "")
+    showNotification("Database Updated Successfully")
+    refresh(refresh() + 1)
+  })
+  
+  # --- STRATEGIC UNIVERSE LOGIC ---
+  observe({
+    click_data <- event_data("plotly_click", source = "universe_main")
+    if (!is.null(click_data)) selected_click(click_data$customdata)
+  })
+  
+  output$selection_text <- renderUI({
+    if (selected_click() == "None") {
+      p("No objective selected. Click a moon to begin.")
+    } else if (selected_click() %in% data_master$moons$label) {
+      m <- data_master$moons[data_master$moons$label == selected_click(), ]
+      tagList(h3(m$label), HTML(m$info))
+    } else {
+      p(paste("Focused on:", selected_click()))
+    }
+  })
+  
+  output$universe <- renderPlotly({
+    fig <- plot_ly(source = "universe_main") %>%
+      add_trace(data=data_master$sun, x=~x, y=~y, z=~z, text=~label, customdata=~label, type='scatter3d', mode='markers+text', hoverinfo = 'text', hovertext=~info, marker=list(size=~size, color=~color)) %>%
+      add_trace(data=data_master$planets, x=~x, y=~y, z=~z, text=~label, customdata=~label, type='scatter3d', mode='markers+text', hoverinfo = 'text', hovertext=~info, marker=list(size=~size, color=~color)) %>%
+      add_trace(data=data_master$moons, x=~mx, y=~my, z=~mz, customdata=~label, type='scatter3d', mode='markers', hoverinfo = 'text', hovertext=~info, marker=list(size=~size, color=~color))
+    
+    curr_sel <- selected_click()
+    if(curr_sel != "None" && curr_sel %in% data_master$moons$label) {
+      m <- data_master$moons[data_master$moons$label == curr_sel, ]
+      target_ids <- as.numeric(unlist(strsplit(m$targets, ",")))
+      p_info <- data_master$planets[data_master$planets$id == m$parent_id, ]
+      fig <- fig %>% add_trace(x=c(m$mx, m$px), y=c(m$my, m$py), z=c(m$mz, m$pz), type='scatter3d', mode='lines', line=list(color='white', width=6), showlegend=F)
+      for(tid in target_ids) {
+        dest_p <- data_master$planets[data_master$planets$id == tid, ]
+        if(p_info$type == "Enabler") {
+          fig <- fig %>% add_trace(x=c(m$px, dest_p$x), y=c(m$py, dest_p$y), z=c(m$pz, dest_p$z), type='scatter3d', mode='lines', line=list(color='cyan', width=4, dash='dot'), showlegend=F)
+        }
+        fig <- fig %>% add_trace(x=c(dest_p$x, 0), y=c(dest_p$y, 0), z=c(dest_p$z, 0), type='scatter3d', mode='lines', line=list(color='gold', width=4), showlegend=F)
+      }
+    }
+    no_axis <- list(showgrid = FALSE, zeroline = FALSE, showline = FALSE, showticklabels = FALSE, title = "")
+    fig %>% layout(scene = list(xaxis = no_axis, yaxis = no_axis, zaxis = no_axis, bgcolor = "black"), hoverlabel = list(bgcolor = "white", font = list(color = "black", size = 12), align = "left"))
+  })
+  
+  # --- ADMIN ACTIONS ---
+  output$admin_panel_ui <- renderUI({
+    if (is.null(input$admin_pin) || input$admin_pin != "1234") return(helpText("Enter PIN (given)"))
+    tagList(
+      navset_card_pill(
+        nav_panel("Registration", br(), textInput("reg_code", "Code"), textInput("reg_name", "Title"), uiOutput("focal_dropdown_ui"), actionButton("do_reg", "Register Activity", class = "btn-success", width = "100%")),
+        nav_panel("Focal Persons", br(), textInput("new_email", "Authorize Email"), actionButton("add_email", "Add to Registry", class = "btn-info"), hr(), DTOutput("email_table")),
+        nav_panel("Power BI Push", br(), h4("Manual Data Synchronization"), actionButton("push_csv", "Push Data to Power BI (CSV)", class = "btn-danger", icon = icon("share-from-square"), width = "100%"))
+      )
+    )
+  })
+  
+  output$focal_dropdown_ui <- renderUI({
+    refresh(); emails <- dbGetQuery(con, "SELECT email FROM focal_registry")$email
+    selectInput("reg_focal_email", "Assign Focal Person", choices = emails)
+  })
+  
+  observeEvent(input$do_reg, {
+    dbExecute(con, "INSERT INTO activities (code, name, focal_email, is_approved, is_completed, is_reported, is_retired, is_decommitted, narrative, updated) VALUES (?,?,?,?,?,?,?,?,?,?)",
+              list(input$reg_code, input$reg_name, tolower(input$reg_focal_email), "NA", "NA", "NA", "NA", "NA", "", as.character(Sys.time())))
+    updateTextInput(session, "reg_code", value = ""); updateTextInput(session, "reg_name", value = "")
+    refresh(refresh() + 1); showNotification("Registered Successfully")
+  })
+  
+  observeEvent(input$push_csv, {
+    write.csv(dbGetQuery(con, "SELECT * FROM activities"), "NARCC_Master_Data.csv", row.names = FALSE)
+    showNotification("CSV Refreshed", type = "message")
+  })
+  
+  observeEvent(input$add_email, {
+    dbExecute(con, "INSERT OR IGNORE INTO focal_registry VALUES (?,?)", list(tolower(input$new_email), as.character(Sys.Date())))
+    updateTextInput(session, "new_email", value = ""); refresh(refresh() + 1)
+  })
+  
+  output$email_table <- renderDT({ refresh(); datatable(dbGetQuery(con, "SELECT * FROM focal_registry"), selection = 'single') })
+}
+
+onStop(function() { dbDisconnect(con) })
 shinyApp(ui, server)
