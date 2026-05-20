@@ -1,9 +1,11 @@
 library(shiny)
 library(shinydashboard)
 library(DBI)
-library(RPostgres) 
+library(RPostgres)
 library(DT)
 library(dplyr)
+library(plotly)        # Required for: plotlyOutput(), render_funder_bar(), etc.
+library(shinyjs)       # Highly recommended for managing UI states and hiding/showing inputs
 
 # ==========================================
 # 1. CLOUD DATABASE CONNECTION
@@ -43,6 +45,8 @@ shinyInput <- function(FUN, len, id, ...) {
 # ==========================================
 # 2. USER INTERFACE (UI)
 # ==========================================
+# 2. USER INTERFACE (UI)
+# ==========================================
 ui <- dashboardPage(
   header = dashboardHeader(title = "IMST Ebola Financial Tracker", titleWidth = 720),
   sidebar = dashboardSidebar(
@@ -53,6 +57,18 @@ ui <- dashboardPage(
   body = dashboardBody(
     tags$head(
       tags$style(HTML("
+        /* 1. Fix the Header and Sidebar */
+        .main-header { position: fixed !important; width: 100%; }
+        .main-sidebar { position: fixed !important; height: 100vh !important; }
+        
+        /* 2. Constrain the content area to scroll independently */
+        .content-wrapper { 
+          margin-top: 50px !important; 
+          height: calc(100vh - 50px) !important; 
+          overflow-y: auto !important; 
+        }
+        
+        /* 3. Keep your existing brand colors */
         .skin-blue .main-header .navbar, .skin-blue .main-header .logo { background-color: #006B3F !important; color: #ffffff !important; font-weight: bold; }
         .skin-blue .main-header .navbar .sidebar-toggle:hover { background-color: #004D2E !important; }
         .skin-blue .main-sidebar .sidebar .sidebar-menu .active a { border-left-color: #D4AF37 !important; }
@@ -62,7 +78,7 @@ ui <- dashboardPage(
       "))
     ),
     tabItems(
-      # --- Overview Tab ---
+      # ... (Keep your existing tabItems code here) ...
       tabItem(tabName = "overview",
               h2("Ebola Response Financial Overview"),
               p("Real-time corporate data summary of registered funding, allocations, and expenditures."),
@@ -71,9 +87,16 @@ ui <- dashboardPage(
                 valueBoxOutput("total_funding_box", width = 4),
                 valueBoxOutput("total_allocated_box", width = 4),
                 valueBoxOutput("total_used_box", width = 4)
+              ),
+              fluidRow(
+                box(plotlyOutput("funder_bar"), width = 6),
+                box(plotlyOutput("pillar_bar"), width = 6)
+              ),
+              fluidRow(
+                box(plotlyOutput("sankey_flow"), width = 12)
               )
       ),
-      # --- Funding Tab ---
+      # ... (Funding, Allocations, and Activity tabs remain exactly as they were) ...
       tabItem(tabName = "funding",
               fluidRow(
                 box(title = "Register New Funding Source", width = 4, status = "primary", solidHeader = TRUE,
@@ -89,7 +112,6 @@ ui <- dashboardPage(
                 )
               )
       ),
-      # --- Allocations Tab ---
       tabItem(tabName = "allocations",
               fluidRow(
                 box(title = "Allocate Funding to Pillars", width = 4, status = "warning", solidHeader = TRUE,
@@ -103,7 +125,6 @@ ui <- dashboardPage(
                 )
               )
       ),
-      # --- activity Tab ---
       tabItem(tabName = "activity",
               fluidRow(
                 box(title = "Log Activity", width = 4, status = "danger", solidHeader = TRUE,
@@ -124,11 +145,17 @@ ui <- dashboardPage(
     )
   )
 )
-
 # ==========================================
 # 3. SERVER LOGIC
 # ==========================================
 server <- function(input, output, session) {
+  ##### Source file to be read for visuals
+  
+  source("viz_logic.R") # Load the external file
+  
+  output$funder_bar <- render_funder_bar(funding_data())
+  output$pillar_bar <- render_pillar_bar(allocations_data())
+  output$sankey_flow <- render_sankey(funding_data(), allocations_data(), activity_data())
   
   refresh_trigger <- reactiveVal(0)
   editing_id <- reactiveVal(NULL)
