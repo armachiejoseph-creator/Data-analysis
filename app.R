@@ -44,7 +44,7 @@ shinyInput <- function(FUN, len, id, ...) {
 # 2. USER INTERFACE (UI)
 # ==========================================
 ui <- dashboardPage(
-  header = dashboardHeader(title = "IMST Ebola Financial Tracker", titleWidth = 320),
+  header = dashboardHeader(title = "IMST Ebola Financial & Activity Tracker", titleWidth = 320),
   sidebar = dashboardSidebar(
     width = 320,
     uiOutput("auth_sidebar"),
@@ -114,9 +114,9 @@ ui <- dashboardPage(
                     numericInput("act_budget", "Activity Budget ($):", value = 0, min = 0),
                     numericInput("act_used", "Amount Used ($):", value = 0, min = 0),
                     dateInput("act_date", "Date of Activity:", value = Sys.Date()),
-                    actionButton("save_activity", "Log Activity", class = "btn-danger", icon = icon("shopping-cart"))
+                    actionButton("save_activity", "Register Activity", class = "btn-danger", icon = icon("shopping-cart"))
                 ),
-                box(title = "Activity Logs", width = 8, status = "danger", solidHeader = TRUE,
+                box(title = "All Actvities Click to edit", width = 8, status = "danger", solidHeader = TRUE,
                     DTOutput("activity_table")
                 )
               )
