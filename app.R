@@ -65,7 +65,9 @@ ui <- dashboardPage(
       # --- Overview Tab ---
       tabItem(tabName = "overview",
               h2("Ebola Response Financial Overview"),
-              p("Real-time corporate data summary of registered funding, allocations, and expenditures."),
+              p("Real-time corporate data summary of registered funding, allocations, 
+                and expenditures. Other visuals will be developed based on the information need of the IMST
+                We may even include epi data here"),
               br(),
               fluidRow(
                 valueBoxOutput("total_funding_box", width = 4),
