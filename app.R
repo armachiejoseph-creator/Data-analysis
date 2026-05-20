@@ -26,9 +26,9 @@ dbExecute(conn, "CREATE TABLE IF NOT EXISTS allocations (id SERIAL PRIMARY KEY, 
 dbExecute(conn, "CREATE TABLE IF NOT EXISTS activity (id SERIAL PRIMARY KEY, allocation_id TEXT, activity_name TEXT, activity_decript TEXT, activity_type TEXT, pillar TEXT, budget REAL, amount_used REAL, date_recorded TEXT)")
 dbDisconnect(conn)
 
-pillars_list <- c("Coordination", "Epidemiology & Surveillance", "Case Management", 
-                  "Laboratory & Diagnostics", "IPC (Infection Prevention & Control)", 
-                  "RCCE (Risk Comm & Community Engagement)", "Logistics & Supply Chain")
+pillars_list <- c("Coordination", "Surveillance", "Case Management", 
+                  "Laboratory & Diagnostics", "IPC", 
+                  "RCCE", "Logistics & Supply Chain", "Research", "CES", "Vaccination")
 
 shinyInput <- function(FUN, len, id, ...) {
   inputs <- character(len)
@@ -44,7 +44,7 @@ shinyInput <- function(FUN, len, id, ...) {
 # 2. USER INTERFACE (UI)
 # ==========================================
 ui <- dashboardPage(
-  header = dashboardHeader(title = "IMST Ebola Financial & Activity Tracker", titleWidth = 320),
+  header = dashboardHeader(title = "IMST Ebola Financial & Activity Tracker", titleWidth = 420),
   sidebar = dashboardSidebar(
     width = 320,
     uiOutput("auth_sidebar"),
