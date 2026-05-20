@@ -27,8 +27,8 @@ dbExecute(conn, "CREATE TABLE IF NOT EXISTS activity (id SERIAL PRIMARY KEY, all
 dbDisconnect(conn)
 
 pillars_list <- c("Coordination", "Surveillance", "Case Management", 
-                  "Laboratory & Diagnostics", "IPC", 
-                  "RCCE", "Logistics & Supply Chain", "Research", "CES", "Vaccination")
+                  "Laboratory", "IPC", "CES",
+                  "RCCE", "Logistics & Supply Chain", "Research", "Vaccination")
 
 shinyInput <- function(FUN, len, id, ...) {
   inputs <- character(len)
@@ -44,7 +44,7 @@ shinyInput <- function(FUN, len, id, ...) {
 # 2. USER INTERFACE (UI)
 # ==========================================
 ui <- dashboardPage(
-  header = dashboardHeader(title = "IMST Ebola Financial & Activity Tracker", titleWidth = 420),
+  header = dashboardHeader(title = "IMST Ebola Financial Tracker", titleWidth = 720),
   sidebar = dashboardSidebar(
     width = 320,
     uiOutput("auth_sidebar"),
@@ -65,9 +65,7 @@ ui <- dashboardPage(
       # --- Overview Tab ---
       tabItem(tabName = "overview",
               h2("Ebola Response Financial Overview"),
-              p("Real-time corporate data summary of registered funding, allocations, 
-                and expenditures. Other visuals will be developed based on the information need of the IMST
-                We may even include epi data here"),
+              p("Real-time corporate data summary of registered funding, allocations, and expenditures."),
               br(),
               fluidRow(
                 valueBoxOutput("total_funding_box", width = 4),
@@ -116,9 +114,9 @@ ui <- dashboardPage(
                     numericInput("act_budget", "Activity Budget ($):", value = 0, min = 0),
                     numericInput("act_used", "Amount Used ($):", value = 0, min = 0),
                     dateInput("act_date", "Date of Activity:", value = Sys.Date()),
-                    actionButton("save_activity", "Register Activity", class = "btn-danger", icon = icon("shopping-cart"))
+                    actionButton("save_activity", "Log Activity", class = "btn-danger", icon = icon("shopping-cart"))
                 ),
-                box(title = "All Actvities Click to edit", width = 8, status = "danger", solidHeader = TRUE,
+                box(title = "Activity Logs", width = 8, status = "danger", solidHeader = TRUE,
                     DTOutput("activity_table")
                 )
               )
@@ -134,6 +132,15 @@ server <- function(input, output, session) {
   
   refresh_trigger <- reactiveVal(0)
   editing_id <- reactiveVal(NULL)
+  observeEvent(input$tabs, {
+    if (input$tabs == "funding") {
+      updateTextInput(session, "funder_name", value = "")
+      updateTextInput(session, "grant_name", value = "")
+      updateNumericInput(session, "grant_amount", value = 0)
+      updateSelectInput(session, "grant_pillar", selected = character(0))
+      updateTextInput(session, "grant_country", value = "")
+    }
+  }, ignoreInit = TRUE)
   user_authenticated <- reactiveVal(FALSE)
   current_user <- reactiveVal(NULL)
   
@@ -335,83 +342,115 @@ server <- function(input, output, session) {
     refresh_trigger(refresh_trigger() + 1)
   })
   
-  # --- STRICT LINE-ITEM EXPENDITURE GUARDRAILS (NEW SUBMISSION) ---
-  
   # ==========================================
   # INTERACTIVE MODALS FOR IN-ROW EDITING
   # ==========================================
+  # --- UPDATED EDIT TRIGGER FOR FUNDING ---
   observeEvent(input$edit_funding_btn, {
+    # 1. Identify the index and pull the data
     index <- as.numeric(strsplit(input$edit_funding_btn, "_")[[1]][3])
     row_data <- funding_data()[index, ]
+    
+    # 2. Store the ID (Crucial for the update step)
+    editing_id(row_data$id)
+    
     selected_pillars <- unlist(strsplit(as.character(row_data$pillar), ", "))
     
+    # 3. Create the Modal
     showModal(modalDialog(
       title = "Edit Funding Record", size = "m", easyClose = TRUE,
       textInput("edit_f_funder", "Funder Name:", value = row_data$funder_name),
       textInput("edit_f_grant", "Grant Name:", value = row_data$grant_name),
       numericInput("edit_f_amount", "Amount ($):", value = row_data$amount, min = 0),
-      selectInput("edit_f_pillar", "Pillars (Select Multiple):", choices = pillars_list, selected = selected_pillars, multiple = TRUE),
+      selectInput("edit_f_pillar", "Pillars (Select Multiple):", 
+                  choices = pillars_list, selected = selected_pillars, multiple = TRUE),
       textInput("edit_f_country", "Country:", value = row_data$country),
-      footer = tagList(modalButton("Cancel"), actionButton("update_funding_db", "Save Changes", class = "btn-success"))
+      footer = tagList(modalButton("Cancel"), 
+                       actionButton("update_funding_db", "Save Changes", class = "btn-success"))
     ))
-    
-    observeEvent(input$update_funding_db, {
-      req(input$edit_f_funder, input$edit_f_grant, input$edit_f_amount > 0)
-      combined_p <- paste(input$edit_f_pillar, collapse = ", ")
-      conn <- get_db_conn()
-      dbExecute(conn, "UPDATE funding_sources SET funder_name=$1, grant_name=$2, amount=$3, pillar=$4, country=$5 WHERE id=$6",
-                list(input$edit_f_funder, input$edit_f_grant, input$edit_f_amount, combined_p, input$edit_f_country, row_data$id))
-      dbDisconnect(conn)
-      removeModal()
-      showNotification("Funding entry updated!", type = "message")
-      refresh_trigger(refresh_trigger() + 1)
-    }, once = TRUE)
   })
   
+  # --- UPDATED SAVE LOGIC FOR FUNDING ---
+  observeEvent(input$update_funding_db, {
+    req(editing_id()) # Ensure we know which record we are updating
+    
+    combined_p <- paste(input$edit_f_pillar, collapse = ", ")
+    
+    conn <- get_db_conn()
+    on.exit(dbDisconnect(conn))
+    
+    query <- "UPDATE funding_sources SET funder_name=$1, grant_name=$2, amount=$3, pillar=$4, country=$5 WHERE id=$6"
+    
+    dbExecute(conn, query, list(
+      input$edit_f_funder, 
+      input$edit_f_grant, 
+      input$edit_f_amount, 
+      combined_p, 
+      input$edit_f_country, 
+      editing_id() # Uses the reactive ID set when "Edit" was clicked
+    ))
+    
+    removeModal()
+    showNotification("Funding entry updated successfully!", type = "message")
+    refresh_trigger(refresh_trigger() + 1)
+  })
   # --- ALLOCATION GUARDRAILS (IN-ROW EDIT / UPDATE) ---
+  # --- UPDATED EDIT TRIGGER FOR ALLOCATIONS ---
   observeEvent(input$edit_alloc_btn, {
+    # 1. Identify index and pull data
     index <- as.numeric(strsplit(input$edit_alloc_btn, "_")[[1]][3])
     row_data <- allocations_data()[index, ]
+    
+    # 2. Set the tracking ID
+    editing_id(row_data$id)
+    
     grants_df <- funding_data()
     grant_choices <- setNames(grants_df$id, paste(grants_df$funder_name, "-", grants_df$grant_name))
     
+    # 3. Freshly generate the modal
     showModal(modalDialog(
       title = "Edit Allocation Entry", size = "m", easyClose = TRUE,
       selectInput("edit_a_source", "Source Grant ID:", choices = grant_choices, selected = row_data$grant_id),
       selectInput("edit_a_pillar", "Target Pillar:", choices = pillars_list, selected = row_data$pillar),
       numericInput("edit_a_amount", "Allocated Amount ($):", value = row_data$allocated_amount, min = 0),
-      footer = tagList(modalButton("Cancel"), actionButton("update_alloc_db", "Save Changes", class = "btn-success"))
+      footer = tagList(modalButton("Cancel"), 
+                       actionButton("update_alloc_db", "Save Changes", class = "btn-success"))
     ))
-    
-    observeEvent(input$update_alloc_db, {
-      req(input$edit_a_amount > 0)
-      
-      target_grant_id <- as.integer(input$edit_a_source)
-      grants_df <- funding_data()
-      grant_max <- as.numeric(grants_df$amount[grants_df$id == target_grant_id])
-      if(length(grant_max) == 0) grant_max <- 0
-      
-      all_allocs <- allocations_data()
-      other_allocs_sum <- sum(as.numeric(all_allocs$allocated_amount[all_allocs$grant_id == target_grant_id & all_allocs$id != row_data$id]), na.rm = TRUE)
-      
-      if(input$edit_a_amount > (grant_max - other_allocs_sum)) {
-        showNotification(paste0("Update Blocked! Maximum available budget left on this grant is $", format(grant_max - other_allocs_sum, big.mark=",")), type="error")
-        return()
-      }
-      
-      conn <- get_db_conn()
-      df_raw <- tryCatch({ dbGetQuery(conn, "SELECT * FROM allocations LIMIT 1") }, error = function(e){data.frame()})
-      amt_col <- if("allocated_amount" %in% names(df_raw)) "allocated_amount" else "amount"
-      
-      query <- paste0("UPDATE allocations SET grant_id=$1, pillar=$2, ", amt_col, "=$3 WHERE id=$4")
-      dbExecute(conn, query, list(target_grant_id, input$edit_a_pillar, input$edit_a_amount, row_data$id))
-      dbDisconnect(conn)
-      removeModal()
-      showNotification("Allocation record updated successfully!", type = "message")
-      refresh_trigger(refresh_trigger() + 1)
-    }, once = TRUE)
   })
   
+  # --- UPDATED SAVE LOGIC FOR ALLOCATIONS ---
+  observeEvent(input$update_alloc_db, {
+    req(editing_id())
+    
+    # 1. Logic Guardrails
+    target_grant_id <- as.integer(input$edit_a_source)
+    grants_df <- funding_data()
+    grant_max <- as.numeric(grants_df$amount[grants_df$id == target_grant_id])
+    if(length(grant_max) == 0) grant_max <- 0
+    
+    all_allocs <- allocations_data()
+    # Check budget excluding the current record being edited
+    other_allocs_sum <- sum(as.numeric(all_allocs$allocated_amount[all_allocs$grant_id == target_grant_id & all_allocs$id != editing_id()]), na.rm = TRUE)
+    
+    if(input$edit_a_amount > (grant_max - other_allocs_sum)) {
+      showNotification(paste0("Update Blocked! Maximum available budget left on this grant is $", format(grant_max - other_allocs_sum, big.mark=",")), type="error")
+      return()
+    }
+    
+    # 2. Update DB
+    conn <- get_db_conn()
+    on.exit(dbDisconnect(conn))
+    
+    df_raw <- tryCatch({ dbGetQuery(conn, "SELECT * FROM allocations LIMIT 1") }, error = function(e){data.frame()})
+    amt_col <- if("allocated_amount" %in% names(df_raw)) "allocated_amount" else "amount"
+    
+    query <- paste0("UPDATE allocations SET grant_id=$1, pillar=$2, ", amt_col, "=$3 WHERE id=$4")
+    dbExecute(conn, query, list(target_grant_id, input$edit_a_pillar, input$edit_a_amount, editing_id()))
+    
+    removeModal()
+    showNotification("Allocation record updated successfully!", type = "message")
+    refresh_trigger(refresh_trigger() + 1)
+  })
   # --- UPDATED EDIT TRIGGER WITH ALLOCATION SELECTION ---
   observeEvent(input$update_act_db, {
     req(editing_id())
@@ -598,10 +637,10 @@ server <- function(input, output, session) {
   output$allocations_table <- renderDT({
     df <- allocations_data()
     if(is.null(df) || nrow(df) == 0 || !("allocated_amount" %in% names(df))) {
-      df_display <- data.frame(`Source Grant` = character(), `Pillar` = character(), `Amount ($)` = numeric(), Actions = character(), check.names = FALSE)
+      df_display <- data.frame(Funder = character(),`Source Grant` = character(), `Pillar` = character(), `Amount ($)` = numeric(), Actions = character(), check.names = FALSE)
     } else {
       actions <- shinyInput(actionButton, nrow(df), 'edit_alloc', label = "Edit", class = "btn-primary btn-xs", onclick = 'Shiny.setInputValue(\"edit_alloc_btn\", this.id, {priority: \"event\"})')
-      df_display <- df %>% mutate(Actions = actions) %>% select(`Source Grant` = grant_name, Pillar = pillar, `Amount ($)` = allocated_amount, Actions)
+      df_display <- df %>% mutate(Actions = actions) %>% select(Funder = funder_name,`Source Grant` = grant_name, Pillar = pillar, `Amount ($)` = allocated_amount, Actions)
     }
     datatable(df_display, escape = FALSE, selection = 'none', options = list(pageLength = 5), rownames = FALSE) %>% 
       formatCurrency(columns = intersect(names(df_display), 'Amount ($)'), currency = "$")
