@@ -41,14 +41,11 @@ shinyInput <- function(FUN, len, id, ...) {
   }
   inputs
 }
-
-# ==========================================
-# 2. USER INTERFACE (UI)
 # ==========================================
 # 2. USER INTERFACE (UI)
 # ==========================================
 ui <- dashboardPage(
-  header = dashboardHeader(title = "IMST Ebola Financial Tracker", titleWidth = 720),
+  header = dashboardHeader(title = "IMST Ebola Response Tracker", titleWidth = 720),
   sidebar = dashboardSidebar(
     width = 320,
     uiOutput("auth_sidebar"),
@@ -57,28 +54,32 @@ ui <- dashboardPage(
   body = dashboardBody(
     tags$head(
       tags$style(HTML("
-        /* 1. Fix the Header and Sidebar */
-        .main-header { position: fixed !important; width: 100%; }
-        .main-sidebar { position: fixed !important; height: 100vh !important; }
-        
-        /* 2. Constrain the content area to scroll independently */
-        .content-wrapper { 
-          margin-top: 50px !important; 
-          height: calc(100vh - 50px) !important; 
-          overflow-y: auto !important; 
-        }
-        
-        /* 3. Keep your existing brand colors */
-        .skin-blue .main-header .navbar, .skin-blue .main-header .logo { background-color: #006B3F !important; color: #ffffff !important; font-weight: bold; }
-        .skin-blue .main-header .navbar .sidebar-toggle:hover { background-color: #004D2E !important; }
-        .skin-blue .main-sidebar .sidebar .sidebar-menu .active a { border-left-color: #D4AF37 !important; }
-        .bg-green-brand { background-color: #006B3F !important; color: white !important; }
-        .bg-blue-brand { background-color: #008DC9 !important; color: white !important; }
-        .bg-gold-brand { background-color: #D4AF37 !important; color: black !important; }
-      "))
+    /* 1. Fix the Header and Sidebar */
+    .main-header { position: fixed !important; width: 100%; }
+    .main-sidebar { position: fixed !important; height: 100vh !important; }
+    
+    /* 2. Constrain the content area to scroll independently */
+    .content-wrapper { 
+      margin-top: 50px !important; 
+      height: calc(100vh - 50px) !important; 
+      overflow-y: auto !important; 
+    }
+    
+    /* 3. Existing brand colors */
+    .skin-blue .main-header .navbar, .skin-blue .main-header .logo { background-color: #006B3F !important; color: #ffffff !important; font-weight: bold; }
+    .skin-blue .main-header .navbar .sidebar-toggle:hover { background-color: #004D2E !important; }
+    .skin-blue .main-sidebar .sidebar .sidebar-menu .active a { border-left-color: #D4AF37 !important; }
+    .bg-green-brand { background-color: #006B3F !important; color: white !important; }
+    .bg-blue-brand { background-color: #008DC9 !important; color: white !important; }
+    .bg-gold-brand { background-color: #D4AF37 !important; color: black !important; }
+
+    /* 4. NEW: Gallery Card Styles */
+    .card-pirs { border-left: 10px solid #006838; margin-bottom: 25px; font-size: 0.85rem; background: #fff; padding: 15px; border-radius: 4px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+    .card-label { font-weight: bold; color: #555; text-transform: uppercase; font-size: 0.7rem; display: block; margin-top: 5px; }
+    .card-header-custom { display:flex; justify-content:space-between; align-items:center; margin-bottom: 10px; border-bottom: 1px solid #eee; padding-bottom: 5px; }
+  "))
     ),
     tabItems(
-      # ... (Keep your existing tabItems code here) ...
       tabItem(tabName = "overview",
               h2("Ebola Response Financial Overview"),
               p("Real-time corporate data summary of registered funding, allocations, and expenditures."),
@@ -96,6 +97,23 @@ ui <- dashboardPage(
                 box(plotlyOutput("sankey_flow"), width = 12)
               )
       ),
+      ## Indicators review page
+      tabItem(tabName = "indicators",
+              h2("Performance Indicators (PIRS)"),
+              p("Review the library of standard indicators for the Ebola response."),
+              hr(),
+              # Filters
+              fluidRow(
+                box(title = "Indicator Filters", width = 12, status = "info", solidHeader = TRUE,
+                    column(6, selectInput("f_pillar", "Filter by Pillar:", 
+                                          choices = c("All", pillars_list))),
+                    column(6, selectInput("f_level", "Filter by Results Level:", 
+                                          choices = c("All", "Impact", "Outcome", "Output")))
+                )
+              ),
+              uiOutput("indicator_cards_ui")
+      ),
+      
       # ... (Funding, Allocations, and Activity tabs remain exactly as they were) ...
       tabItem(tabName = "funding",
               fluidRow(
@@ -118,7 +136,7 @@ ui <- dashboardPage(
                     selectInput("alloc_grant_select", "Select Source Grant:", choices = NULL),
                     selectInput("alloc_pillar", "Target Pillar:", choices = pillars_list),
                     numericInput("alloc_amount", "Allocated Amount ($):", value = 0, min = 0),
-                    actionButton("save_allocation", "Save Allocation", class = "btn-warning", icon = icon("share-alt"))
+                    actionButton("save_allocation", "Save Allocation", class = "btn-warning", icon = icon("share-alt")),
                 ),
                 box(title = "Pillar Allocations Breakdown", width = 8, status = "warning", solidHeader = TRUE,
                     DTOutput("allocations_table")
@@ -141,11 +159,17 @@ ui <- dashboardPage(
                     DTOutput("activity_table")
                 )
               )
+      ),
+      tabItem(tabName = "reporting",
+              fluidRow(
+                box(title = "Indicator Reporting", width = 12,
+                    DTOutput("needle_table")
+                )
+              )
       )
     )
   )
 )
-# ==========================================
 # 3. SERVER LOGIC
 # ==========================================
 server <- function(input, output, session) {
@@ -187,12 +211,50 @@ server <- function(input, output, session) {
     menu_list <- list(menuItem("Dashboard Overview", tabName = "overview", icon = icon("dashboard")))
     if (user_authenticated()) {
       menu_list <- append(menu_list, list(
-        menuItem("1. Register Funding", tabName = "funding", icon = icon("hand-holding-usd")),
-        menuItem("2. Pillar Allocations", tabName = "allocations", icon = icon("pie-chart")),
-        menuItem("3. Activity Tracker", tabName = "activity", icon = icon("file-invoice-dollar"))
+        menuItem("1. Indicators Library", tabName = "indicators", icon = icon("list-ol")),
+        menuItem("2. Register Funding", tabName = "funding", icon = icon("hand-holding-usd")),
+        menuItem("3. Pillar Allocations", tabName = "allocations", icon = icon("pie-chart")),
+        menuItem("4. Activity Tracker", tabName = "activity", icon = icon("file-invoice-dollar")),
+        menuItem("5. Indicator Reproting", tabName = "reporting", icon = icon("chart-line"))
       ))
     }
     do.call(sidebarMenu, menu_list)
+  })
+  
+  # --- SERVER LOGIC FOR GALLERY CARDS ---
+  output$indicator_cards_ui <- renderUI({
+    # 1. Get the data from your database (using your existing reactive)
+    data <- pirs_data() 
+    
+    # 2. Safety check: does data exist?
+    if(is.null(data) || nrow(data) == 0) return(h4("No records found in the database."))
+    
+    # 3. Apply Filters
+    if(input$f_pillar != "All") data <- data %>% filter(pillar == input$f_pillar)
+    if(input$f_level != "All") data <- data %>% filter(results_level == input$f_level)
+    
+    if(nrow(data) == 0) return(p("No indicators found for these filters."))
+    
+    # 4. Generate the cards
+    card_list <- lapply(1:nrow(data), function(i) {
+      div(class = "card-pirs",
+          div(class = "card-header-custom", 
+              tags$b(data$id[i]), 
+              span(class="badge bg-warning text-dark", data$indicator_tier[i])
+          ),
+          h5(style="color:#006838; font-weight:bold;", data$indicator[i]),
+          layout_column_wrap(width = 1/2,
+                             div(span(class="card-label", "Level"), data$results_level[i]),
+                             div(span(class="card-label", "Frequency"), data$frequency[i])
+          ),
+          hr(),
+          span(class="card-label", "Definition"), p(data$definition[i])
+      )
+    })
+    
+    # 5. Arrange cards in a nice 2-column grid
+    split_indices <- split(seq_along(card_list), ceiling(seq_along(card_list) / 2))
+    lapply(split_indices, function(indices) fluidRow(column(6, card_list[indices])))
   })
   
   observeEvent(input$login_btn, {
@@ -208,6 +270,126 @@ server <- function(input, output, session) {
     }
   })
   
+  
+  # 2. Use the same Edit Trigger Logic as your Activity Tracker
+  show_itt_modal <- function(act_id, read_only) {
+    conn <- get_db_conn()
+    on.exit(dbDisconnect(conn))
+    
+    # Adjust 'disaggregation_type' if your column in 'pirs' is named differently (e.g., 'disagg_by')
+    query <- "
+    SELECT i.*, a.activity_name, p.indicator, p.disaggregation 
+    FROM itt i 
+    JOIN activity a ON i.activity_id = a.id 
+    JOIN pirs p ON i.pirs_id = p.id 
+    WHERE i.activity_id = $1"
+    
+    record <- dbGetQuery(conn, query, list(act_id))
+    
+    if(nrow(record) == 0) {
+      showNotification("No data found for this activity.", type = "error")
+      return()
+    }
+    
+    showModal(modalDialog(
+      title = if(read_only) "Review Indicator" else "Edit Indicator",
+      size = "l",
+      
+      # Header Information
+      div(style="background:#f4f4f4; padding:10px; margin-bottom:15px; border-left:4px solid #006838;",
+          tags$b("Activity: "), record$activity_name[1], br(),
+          tags$b("Indicator: "), record$indicator[1]
+      ),
+      
+      textInput("itt_val", "Value/Progress:", value = record$value[1]),
+      
+      # Instructional Label for Disaggregation
+      div(style="margin-bottom: 5px; font-weight: bold; color: #555;", 
+          "Disaggregation Instructions: ", 
+          span(style="color: #008DC9;", record$disaggregation[1])
+      ),
+      textAreaInput("itt_disag", "Disaggregation Details:", value = record$disaggregation[1], 
+                    placeholder = paste("Example format:", record$disaggregation[1])),
+      
+      textAreaInput("itt_comments", "Comments:", value = record$comments[1]),
+      
+      footer = tagList(
+        modalButton("Close"),
+        if(!read_only) actionButton("save_itt_update", "Save Changes", class = "btn-success")
+      )
+    ))
+    
+    if(read_only) {
+      shinyjs::disable("itt_val")
+      shinyjs::disable("itt_disag")
+      shinyjs::disable("itt_comments")
+    }
+  }
+  
+  ### Indicator reporting
+  refresh_trigger <- reactiveVal(0)
+  selectInput("report_filter", "Filter by Status:",
+              choices = c("All" = "all", 
+                          "Reported" = "reported", 
+                          "Not Reported" = "not_reported"))
+  output$needle_table <- renderDT({
+    refresh_trigger() 
+    conn <- get_db_conn()
+    on.exit(dbDisconnect(conn))
+    
+    # Set a default value of 'all' if input$report_filter is NULL
+    current_filter <- if (is.null(input$report_filter)) "all" else input$report_filter
+    
+    # Determine the SQL filter
+    filter_sql <- switch(current_filter,
+                         "reported"     = "AND i.value IS NOT NULL AND i.value <> ''",
+                         "not_reported" = "AND (i.value IS NULL OR i.value = '')",
+                         "all"          = ""
+    )
+    
+    query <- sprintf("
+    SELECT a.id, a.activity_name, p.indicator, i.value, i.disaggregation, i.comments 
+    FROM activity a 
+    JOIN itt i ON a.id = i.activity_id 
+    JOIN pirs p ON i.pirs_id = p.id 
+    WHERE a.move_ind::text = 'TRUE' %s", filter_sql)
+    
+    data <- dbGetQuery(conn, query)
+    
+    # Create buttons
+    data$actions <- paste0(
+      actionButton("edit_btn", "Edit", class = "btn-primary btn-sm", 
+                   onclick = sprintf("Shiny.setInputValue('edit_itt_id', '%s', {priority: 'event'})", data$id)),
+      " ",
+      actionButton("rev_btn", "Review", class = "btn-default btn-sm", 
+                   onclick = sprintf("Shiny.setInputValue('review_itt_id', '%s', {priority: 'event'})", data$id))
+    )
+    
+    datatable(data, escape = FALSE, options = list(pageLength = 10))
+  })
+  # --- 3. EVENT LISTENERS  for indicator reporting---
+  observeEvent(input$edit_itt_id, {
+    show_itt_modal(input$edit_itt_id, read_only = FALSE)
+  })
+  
+  observeEvent(input$review_itt_id, {
+    show_itt_modal(input$review_itt_id, read_only = TRUE)
+  })
+  
+  # --- 4. SAVE LOGIC ---
+  observeEvent(input$save_itt_update, {
+    req(input$edit_itt_id)
+    
+    conn <- get_db_conn()
+    dbExecute(conn, 
+              "UPDATE itt SET value=$1, disaggregation=$2, comments=$3 WHERE activity_id=$4",
+              list(input$itt_val, input$itt_disag, input$itt_comments, input$edit_itt_id))
+    dbDisconnect(conn)
+    
+    removeModal()
+    showNotification("Indicator updated successfully!", type = "message")
+    refresh_trigger(refresh_trigger() + 1) # This updates your table automatically
+  })
   observeEvent(input$logout_btn, {
     user_authenticated(FALSE)
     current_user(NULL)
@@ -249,6 +431,14 @@ server <- function(input, output, session) {
     df <- dbGetQuery(conn, "SELECT * FROM activity ORDER BY id DESC")
     dbDisconnect(conn)
     df
+  })
+  
+  # --- NEW: Indicator Data Reactive ---
+  pirs_data <- reactive({
+    refresh_trigger() # This ensures it updates if you ever add/edit indicators
+    conn <- get_db_conn()
+    on.exit(dbDisconnect(conn))
+    dbGetQuery(conn, "SELECT * FROM pirs")
   })
   
   # --- Save Activity Logic ---
@@ -300,8 +490,6 @@ server <- function(input, output, session) {
     }
   })
   
-  # Dynamic Dropdown Mapping for Expenditures View
-  # Dynamic Dropdown Mapping for Expenditures View
   # Dynamic Dropdown Mapping for Activity Tracker
   observe({
     df <- allocations_data()
@@ -528,22 +716,32 @@ server <- function(input, output, session) {
   
   
   # --- STRICT tracker GUARDRAILS (IN-ROW EDIT / UPDATE) ---
+  ##kkk
   observeEvent(input$edit_exp_btn, {
     index <- as.numeric(strsplit(input$edit_exp_btn, "_")[[1]][3]) # Change to [4] if [3] causes errors
     row_data <- activity_data()[index, ]
     editing_id(row_data$id)
     
+    pirs_list_reactive <- reactive({
+      conn <- get_db_conn()
+      on.exit(dbDisconnect(conn))
+      dbGetQuery(conn, "SELECT id, indicator FROM pirs")
+    })
+    
+    pirs_data <- pirs_list_reactive()
+    pirs_choices <- setNames(pirs_data$id, pirs_data$indicator)
     # 1. Prepare allocation choices: Funder - Grant (Pillar)
     alloc_df <- allocations_data()
     # Updated the label to include the Pillar as you requested
     alloc_choices <- setNames(alloc_df$id, paste0(alloc_df$funder_name, " - ", alloc_df$grant_name, " (", alloc_df$pillar, ")"))
     countries=c("Contiental","Central Region", "Western Region", "DRC","Uganda", "Rwanda","Sudan" )
+    current_indicator <- row_data$output_indicator
     # Helper to handle potential NULLs in older database records
     val_memo <- if(is.null(row_data$memo_submitted) || is.na(row_data$memo_submitted)) FALSE else as.logical(row_data$memo_submitted)
     val_approved <- if(is.null(row_data$approved) || is.na(row_data$approved)) FALSE else as.logical(row_data$approved)
     val_report <- if(is.null(row_data$report_submitted) || is.na(row_data$report_submitted)) FALSE else as.logical(row_data$report_submitted)
     val_decomit <- if(is.null(row_data$funds_decommistted) || is.na(row_data$funds_decommistted)) FALSE else as.logical(row_data$funds_decommistted)
-    
+    val_needle <- isTRUE(as.logical(row_data$move_ind))
     # 2. Show the modal with ALL fields
     showModal(modalDialog(
       title = "Edit Full Activity Record", size = "l", easyClose = TRUE,
@@ -597,9 +795,20 @@ server <- function(input, output, session) {
         column(6, numericInput("edit_e_budget", "Budget ($):", value = row_data$budget, min = 0)),
         column(6, numericInput("edit_e_used", "Amount Used ($):", value = row_data$amount_used, min = 0))
       ),
-      
+      fluidRow(
+        column(8, 
+               selectInput("edit_kpi", "Supporting KPI (Output):", 
+                           choices = c("None" = "", pirs_choices), 
+                           selected = current_indicator)
+        ),
+        column(4, 
+               # Adding a margin-top helps align the checkbox with the dropdown box
+               tags$div(style = "margin-top: 25px;",
+                        checkboxInput("edit_needle", "Move the Needle?", value = val_needle)
+               )
+        )
+      ),      
       dateInput("edit_e_date", "Date of Activity:", value = as.Date(row_data$date_recorded)),
-      
       footer = tagList(modalButton("Cancel"), actionButton("update_act_db", "Save Changes", class = "btn-success"))
     ))
     
@@ -614,12 +823,13 @@ server <- function(input, output, session) {
     combined_benefit <- paste(input$edit_benef, collapse = ", ")
     # Added memo_submitted to the query
     query <- "UPDATE activity SET 
-            allocation_id=$1, activity_name=$2, activity_decript=$3, 
-            activity_type=$4, pillar=$5, budget=$6, amount_used=$7, 
-            memo_submitted=$8, approved=$9, start_implement=$10, 
-            report_submitted=$11, funds_decommistted=$12, date_recorded=$13, 
-            support_pillars=$14, benefitiary=$15 
-            WHERE id=$16"
+              allocation_id=$1, activity_name=$2, activity_decript=$3, 
+              activity_type=$4, pillar=$5, budget=$6, amount_used=$7, 
+              memo_submitted=$8, approved=$9, start_implement=$10, 
+              report_submitted=$11, funds_decommistted=$12, date_recorded=$13, 
+              support_pillars=$14, benefitiary=$15, 
+              output_indicator=$17, move_ind=$18 
+              WHERE id=$16"
     
     
     dbExecute(conn, query, list(
@@ -636,9 +846,26 @@ server <- function(input, output, session) {
       as.logical(input$edit_report),
       as.logical(input$edit_decomit),
       as.character(input$edit_e_date),
-      combined_pillars, # <--- Now passing the collapsed string
+      combined_pillars,
       combined_benefit,
-      editing_id()
+      editing_id(),        # $16
+      input$edit_kpi,        # $17
+      input$edit_needle    # $18
+    ))
+    # Perform the Upsert on the ITT table using activity_id as the anchor
+    query_itt <- "
+    INSERT INTO itt (activity_id, pirs_id, moves_needle)
+    VALUES ($1, $2, $3)
+    ON CONFLICT (activity_id) 
+    DO UPDATE SET
+      pirs_id = EXCLUDED.pirs_id,
+      moves_needle = EXCLUDED.moves_needle;
+  "
+    
+    dbExecute(conn, query_itt, list(
+      editing_id(),                   # $1: The Primary Key (activity_id)
+      if(input$edit_kpi == "") NULL else input$edit_kpi, # $2
+      input$edit_needle               # $3
     ))
     
     removeModal()
@@ -660,6 +887,8 @@ server <- function(input, output, session) {
     datatable(df_display, escape = FALSE, selection = 'none', options = list(pageLength = 5), rownames = FALSE) %>% 
       formatCurrency(columns = intersect(names(df_display), 'Amount ($)'), currency = "$")
   })
+  
+  
   
   output$allocations_table <- renderDT({
     df <- allocations_data()
@@ -706,7 +935,7 @@ server <- function(input, output, session) {
   output$total_allocated_box <- renderValueBox({
     df_check <- allocations_data()
     res <- if(nrow(df_check) > 0 && "allocated_amount" %in% names(df_check)) sum(as.numeric(df_check$allocated_amount), na.rm = TRUE) else 0
-    box_content <- valueBox(paste0("$", format(res, scientific = FALSE, big.mark = ",")), "Total Funds Allocated", icon = icon("pie-chart"), color = "blue")
+    box_content <- valueBox(paste0("$", format(res, scientific = FALSE, big.mark = ",")), "Total Funds Allocated", icon = icon("pie-chart"), color = "orange")
     box_content$children[[1]] <- tagAppendAttributes(box_content$children[[1]], class = "bg-blue-brand")
     box_content
   })
@@ -714,7 +943,7 @@ server <- function(input, output, session) {
   output$total_used_box <- renderValueBox({
     df_check <- activity_data()
     res <- if(nrow(df_check) > 0) sum(as.numeric(df_check$amount_used), na.rm = TRUE) else 0
-    valueBox(paste0("$", format(res, scientific = FALSE, big.mark = ",")), "Total Funds Used", icon = icon("credit-card"), color = "yellow")
+    valueBox(paste0("$", format(res, scientific = FALSE, big.mark = ",")), "Total Funds Used", icon = icon("credit-card"), color = "brown")
   })
 }
 
