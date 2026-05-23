@@ -3014,7 +3014,7 @@
       "checksum": "baf6aecbed9bd2fc38755bf8c45d16ca"
     },
     "app.R": {
-      "checksum": "ed7fdd022f1085cd2c23bc2fbb1a360e"
+      "checksum": "700dcf165c1c7d9ecba582e825c3ac66"
     },
     "NARCC_traker_app.R": {
       "checksum": "c2c09301c6f610d8d900b5fce5f464d1"
@@ -3036,6 +3036,9 @@
     },
     "Strategic_mapping_diagram.R": {
       "checksum": "6bdd8b48117a0d7e8637f8ddef56e04b"
+    },
+    "viz_logic.R": {
+      "checksum": "1c96b6ed11664701fc31bfd4da0330ea"
     }
   },
   "users": null

@@ -22,6 +22,7 @@ get_db_conn <- function() {
 }
 
 # Ensure baseline database structures exist seamlessly
+# Ensure baseline database structures exist seamlessly
 conn = get_db_conn()
 dbExecute(conn, "CREATE TABLE IF NOT EXISTS funding_sources (id SERIAL PRIMARY KEY, funder_name TEXT, grant_name TEXT, amount REAL, pillar TEXT, country TEXT)")
 dbExecute(conn, "CREATE TABLE IF NOT EXISTS allocations (id SERIAL PRIMARY KEY, grant_id INTEGER, pillar TEXT, allocated_amount REAL)")
@@ -82,8 +83,16 @@ ui <- dashboardPage(
     tabItems(
       tabItem(tabName = "overview",
               h2("Ebola Response Financial Overview"),
-              p("Real-time corporate data summary of registered funding, allocations, and expenditures."),
-              br(),
+              
+              # 1. NEW: Narrative section
+              wellPanel(
+                p("This dashboard provides a comprehensive view of the current funding, allocations, and expenditures ",
+                  "for the IMST Ebola response. It tracks progress against targets and illustrates resource flows across activity streams."),
+                tags$hr(style = "border-top: 1px solid #ccc;"),
+                p(tags$i("Note: Currently, the IMST is developing its continental plan and will publish same soon."))
+              ),
+              
+              # 2. Existing content
               fluidRow(
                 valueBoxOutput("total_funding_box", width = 4),
                 valueBoxOutput("total_allocated_box", width = 4),
@@ -163,6 +172,13 @@ ui <- dashboardPage(
       tabItem(tabName = "reporting",
               fluidRow(
                 box(title = "Indicator Reporting", width = 12,
+                    # Add the filter here, inside the box
+                    selectInput("report_filter", "Filter by Status:",
+                                choices = c("All" = "all", 
+                                            "Reported" = "reported", 
+                                            "Not Reported" = "not_reported"),
+                                width = "300px"), # Added width for better look
+                    
                     DTOutput("needle_table")
                 )
               )
@@ -180,6 +196,7 @@ server <- function(input, output, session) {
   output$funder_bar <- render_funder_bar(funding_data())
   output$pillar_bar <- render_pillar_bar(allocations_data())
   output$sankey_flow <- render_sankey(funding_data(), allocations_data(), activity_data())
+  
   
   refresh_trigger <- reactiveVal(0)
   editing_id <- reactiveVal(NULL)
@@ -269,127 +286,112 @@ server <- function(input, output, session) {
       showNotification("Access Denied", type = "error")
     }
   })
+  ###########################################################
+  ### Indicator reporting 
+  # 1. SERVER-SIDE MEMORY (Define once in your server function)
+  active_itt_id <- reactiveVal(NULL)
   
-  
-  # 2. Use the same Edit Trigger Logic as your Activity Tracker
-  show_itt_modal <- function(act_id, read_only) {
+  # 2. MODAL BUILDER (Simplified for one button)
+  # --- REVISED MODAL BUILDER ---
+  show_itt_modal <- function(itt_id) {
     conn <- get_db_conn()
     on.exit(dbDisconnect(conn))
     
-    # Adjust 'disaggregation_type' if your column in 'pirs' is named differently (e.g., 'disagg_by')
+    # ALIASING IS THE KEY: We give them unique names here
     query <- "
-    SELECT i.*, a.activity_name, p.indicator, p.disaggregation 
+    SELECT i.id, i.value as itt_value, i.disaggregation as itt_disagg, i.comments, 
+           a.activity_name, p.indicator, p.disaggregation as pirs_instructions
     FROM itt i 
-    JOIN activity a ON i.activity_id = a.id 
-    JOIN pirs p ON i.pirs_id = p.id 
-    WHERE i.activity_id = $1"
+    LEFT JOIN activity a ON i.activity_id = a.id 
+    LEFT JOIN pirs p ON i.pirs_id = p.id 
+    WHERE i.id = $1"
     
-    record <- dbGetQuery(conn, query, list(act_id))
-    
-    if(nrow(record) == 0) {
-      showNotification("No data found for this activity.", type = "error")
-      return()
-    }
+    record <- dbGetQuery(conn, query, list(itt_id))
     
     showModal(modalDialog(
-      title = if(read_only) "Review Indicator" else "Edit Indicator",
+      title = "Edit Indicator",
       size = "l",
-      
-      # Header Information
       div(style="background:#f4f4f4; padding:10px; margin-bottom:15px; border-left:4px solid #006838;",
-          tags$b("Activity: "), record$activity_name[1], br(),
-          tags$b("Indicator: "), record$indicator[1]
+          tags$b("Activity: "), record$activity_name, br(),
+          tags$b("Indicator: "), record$indicator
       ),
       
-      textInput("itt_val", "Value/Progress:", value = record$value[1]),
+      # Use the Aliased names here
+      textInput("itt_val", "Value/Progress:", value = record$itt_value),
       
-      # Instructional Label for Disaggregation
       div(style="margin-bottom: 5px; font-weight: bold; color: #555;", 
-          "Disaggregation Instructions: ", 
-          span(style="color: #008DC9;", record$disaggregation[1])
+          "Instructions: ", span(style="color: #008DC9;", record$pirs_instructions)
       ),
-      textAreaInput("itt_disag", "Disaggregation Details:", value = record$disaggregation[1], 
-                    placeholder = paste("Example format:", record$disaggregation[1])),
       
-      textAreaInput("itt_comments", "Comments:", value = record$comments[1]),
+      textAreaInput("itt_disag", "Disaggregation Details:", value = record$itt_disagg, 
+                    placeholder = record$pirs_instructions),
       
-      footer = tagList(
-        modalButton("Close"),
-        if(!read_only) actionButton("save_itt_update", "Save Changes", class = "btn-success")
-      )
+      textAreaInput("itt_comments", "Comments:", value = record$comments),
+      
+      footer = tagList(modalButton("Close"), actionButton("save_itt_update", "Save Changes", class = "btn-success"))
     ))
-    
-    if(read_only) {
-      shinyjs::disable("itt_val")
-      shinyjs::disable("itt_disag")
-      shinyjs::disable("itt_comments")
-    }
-  }
-  
-  ### Indicator reporting
-  refresh_trigger <- reactiveVal(0)
-  selectInput("report_filter", "Filter by Status:",
-              choices = c("All" = "all", 
-                          "Reported" = "reported", 
-                          "Not Reported" = "not_reported"))
+  }  
+  # 3. TABLE RENDERING (Using one button per row)
   output$needle_table <- renderDT({
     refresh_trigger() 
     conn <- get_db_conn()
     on.exit(dbDisconnect(conn))
     
-    # Set a default value of 'all' if input$report_filter is NULL
+    # Ensure we handle NULL if the page is still loading
     current_filter <- if (is.null(input$report_filter)) "all" else input$report_filter
     
     # Determine the SQL filter
     filter_sql <- switch(current_filter,
-                         "reported"     = "AND i.value IS NOT NULL AND i.value <> ''",
-                         "not_reported" = "AND (i.value IS NULL OR i.value = '')",
+                         # Reported: Value is not null, not just empty, and not just whitespace
+                         "reported"     = "AND (i.value IS NOT NULL AND TRIM(i.value) <> '')",
+                         
+                         # Not Reported: Everything else (NULL, empty string, or just spaces)
+                         "not_reported" = "AND (i.value IS NULL OR TRIM(i.value) = '')",
+                         
                          "all"          = ""
     )
     
+    # Inject the filter_sql into your query
     query <- sprintf("
-    SELECT a.id, a.activity_name, p.indicator, i.value, i.disaggregation, i.comments 
-    FROM activity a 
-    JOIN itt i ON a.id = i.activity_id 
-    JOIN pirs p ON i.pirs_id = p.id 
+    SELECT i.id, a.activity_name, p.indicator, i.value, i.disaggregation, i.comments 
+    FROM itt i 
+    LEFT JOIN activity a ON i.activity_id = a.id 
+    LEFT JOIN pirs p ON i.pirs_id = p.id 
     WHERE a.move_ind::text = 'TRUE' %s", filter_sql)
     
     data <- dbGetQuery(conn, query)
     
-    # Create buttons
+    # Keep your existing edit button logic
     data$actions <- paste0(
-      actionButton("edit_btn", "Edit", class = "btn-primary btn-sm", 
-                   onclick = sprintf("Shiny.setInputValue('edit_itt_id', '%s', {priority: 'event'})", data$id)),
-      " ",
-      actionButton("rev_btn", "Review", class = "btn-default btn-sm", 
-                   onclick = sprintf("Shiny.setInputValue('review_itt_id', '%s', {priority: 'event'})", data$id))
+      '<button class="btn btn-primary btn-sm" onclick="Shiny.setInputValue(\'edit_trigger\', \'', data$id, '\', {priority: \'event\'})">report</button>'
     )
     
     datatable(data, escape = FALSE, options = list(pageLength = 10))
-  })
-  # --- 3. EVENT LISTENERS  for indicator reporting---
-  observeEvent(input$edit_itt_id, {
-    show_itt_modal(input$edit_itt_id, read_only = FALSE)
-  })
-  
-  observeEvent(input$review_itt_id, {
-    show_itt_modal(input$review_itt_id, read_only = TRUE)
+  })  
+  # 4. EVENT LISTENER
+  observeEvent(input$edit_trigger, {
+    active_itt_id(input$edit_trigger) # Store ID in memory
+    show_itt_modal(input$edit_trigger)
   })
   
-  # --- 4. SAVE LOGIC ---
+  # 5. SAVE LOGIC
   observeEvent(input$save_itt_update, {
-    req(input$edit_itt_id)
+    target_id <- active_itt_id()
+    req(target_id)
     
     conn <- get_db_conn()
+    # Update based on unique itt ID
     dbExecute(conn, 
-              "UPDATE itt SET value=$1, disaggregation=$2, comments=$3 WHERE activity_id=$4",
-              list(input$itt_val, input$itt_disag, input$itt_comments, input$edit_itt_id))
+              "UPDATE itt SET value=$1, disaggregation=$2, comments=$3 WHERE id=$4",
+              list(input$itt_val, input$itt_disag, input$itt_comments, target_id))
     dbDisconnect(conn)
     
     removeModal()
     showNotification("Indicator updated successfully!", type = "message")
-    refresh_trigger(refresh_trigger() + 1) # This updates your table automatically
+    refresh_trigger(refresh_trigger() + 1)
   })
+  ################################################################################################
+  ###   end of reporting
   observeEvent(input$logout_btn, {
     user_authenticated(FALSE)
     current_user(NULL)
@@ -943,7 +945,7 @@ server <- function(input, output, session) {
   output$total_used_box <- renderValueBox({
     df_check <- activity_data()
     res <- if(nrow(df_check) > 0) sum(as.numeric(df_check$amount_used), na.rm = TRUE) else 0
-    valueBox(paste0("$", format(res, scientific = FALSE, big.mark = ",")), "Total Funds Used", icon = icon("credit-card"), color = "brown")
+    valueBox(paste0("$", format(res, scientific = FALSE, big.mark = ",")), "Total Funds Used", icon = icon("hourglass-half"), color = "green")
   })
 }
 
