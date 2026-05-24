@@ -22,6 +22,7 @@ get_db_conn <- function() {
 }
 
 # Ensure baseline database structures exist seamlessly
+# Ensure baseline database structures exist seamlessly
 conn = get_db_conn()
 dbExecute(conn, "CREATE TABLE IF NOT EXISTS funding_sources (id SERIAL PRIMARY KEY, funder_name TEXT, grant_name TEXT, amount REAL, pillar TEXT, country TEXT)")
 dbExecute(conn, "CREATE TABLE IF NOT EXISTS allocations (id SERIAL PRIMARY KEY, grant_id INTEGER, pillar TEXT, allocated_amount REAL)")
@@ -47,7 +48,7 @@ shinyInput <- function(FUN, len, id, ...) {
 ui <- dashboardPage(
   header = dashboardHeader(title = "IMST Ebola Response Tracker", titleWidth = 720),
   sidebar = dashboardSidebar(
-    width = 320,
+    width = 220,
     uiOutput("auth_sidebar"),
     uiOutput("sidebar_menu_items")
   ),
@@ -390,12 +391,14 @@ server <- function(input, output, session) {
     refresh_trigger(refresh_trigger() + 1)
   })
   ################################################################################################
-  ###   end of reporting
+  ###   end of reporting and now loging in.
   observeEvent(input$logout_btn, {
     user_authenticated(FALSE)
     current_user(NULL)
   })
-  # --- Resilient Reactive Core Data Pulls ---
+  #######################################################################################
+  # --- Funding registration and editing---
+  #########################################################################################
   funding_data <- reactive({
     refresh_trigger()
     conn <- get_db_conn()
@@ -561,7 +564,6 @@ server <- function(input, output, session) {
   # ==========================================
   # INTERACTIVE MODALS FOR IN-ROW EDITING
   # ==========================================
-  # --- UPDATED EDIT TRIGGER FOR FUNDING ---
   observeEvent(input$edit_funding_btn, {
     # 1. Identify the index and pull the data
     index <- as.numeric(strsplit(input$edit_funding_btn, "_")[[1]][3])
@@ -729,9 +731,14 @@ server <- function(input, output, session) {
       dbGetQuery(conn, "SELECT id, indicator FROM pirs")
     })
     
-    pirs_data <- pirs_list_reactive()
-    pirs_choices <- setNames(pirs_data$id, pirs_data$indicator)
-    # 1. Prepare allocation choices: Funder - Grant (Pillar)
+    ################# p 
+    conn <- get_db_conn()
+    pirs_data <- dbGetQuery(conn, "SELECT * FROM pirs")
+    dbDisconnect(conn)
+    #pirs_data <- pirs_list_reactive()
+    pirs_dat=pirs_data[pirs_data$results_level=="Output", ]
+    pirs_choices <- setNames(pirs_dat$id, pirs_dat$indicator)
+    
     alloc_df <- allocations_data()
     # Updated the label to include the Pillar as you requested
     alloc_choices <- setNames(alloc_df$id, paste0(alloc_df$funder_name, " - ", alloc_df$grant_name, " (", alloc_df$pillar, ")"))
