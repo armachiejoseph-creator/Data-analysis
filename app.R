@@ -4,9 +4,9 @@ library(DBI)
 library(RPostgres)
 library(DT)
 library(dplyr)
+library(bslib)
 library(plotly)        # Required for: plotlyOutput(), render_funder_bar(), etc.
 library(shinyjs)       # Highly recommended for managing UI states and hiding/showing inputs
-
 # ==========================================
 # 1. CLOUD DATABASE CONNECTION
 # ==========================================
