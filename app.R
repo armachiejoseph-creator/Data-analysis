@@ -22,7 +22,6 @@ get_db_conn <- function() {
 }
 
 # Ensure baseline database structures exist seamlessly
-# Ensure baseline database structures exist seamlessly
 conn = get_db_conn()
 dbExecute(conn, "CREATE TABLE IF NOT EXISTS funding_sources (id SERIAL PRIMARY KEY, funder_name TEXT, grant_name TEXT, amount REAL, pillar TEXT, country TEXT)")
 dbExecute(conn, "CREATE TABLE IF NOT EXISTS allocations (id SERIAL PRIMARY KEY, grant_id INTEGER, pillar TEXT, allocated_amount REAL)")
