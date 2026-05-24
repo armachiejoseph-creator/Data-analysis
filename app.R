@@ -270,8 +270,15 @@ server <- function(input, output, session) {
     })
     
     # 5. Arrange cards in a nice 2-column grid
-    split_indices <- split(seq_along(card_list), ceiling(seq_along(card_list) / 2))
-    lapply(split_indices, function(indices) fluidRow(column(6, card_list[indices])))
+    n <- nrow(data)
+    tagList(
+      lapply(seq(1, n, by = 2), function(i) {
+        fluidRow(
+          column(12, card_list[[i]]),
+          if (i + 1 <= n) column(12, card_list[[i + 1]])
+        )
+      })
+    )
   })
   
   observeEvent(input$login_btn, {
