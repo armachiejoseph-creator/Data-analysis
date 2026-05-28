@@ -199,7 +199,7 @@ server <- function(input, output, session) {
   
   output$funder_bar <- render_funder_bar(funding_data())
   output$pillar_bar <- render_pillar_bar(allocations_data())
-  #output$sankey_flow <- render_sankey(funding_data(), allocations_data(), activity_data())
+  output$sankey_flow <- render_sankey(funding_data(), allocations_data(), activity_data())
   output$deployment <- render_deployment_map(pie_data)
   
   refresh_trigger <- reactiveVal(0)
