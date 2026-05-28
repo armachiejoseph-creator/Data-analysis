@@ -7,7 +7,9 @@ library(dplyr)
 library(bslib)
 library(plotly)        # Required for: plotlyOutput(), render_funder_bar(), etc.
 library(shinyjs)       # Highly recommended for managing UI states and hiding/showing inputs
-# ==========================================
+library(leaflet)
+library(leaflet.minicharts)
+library(googlesheets4)# ==========================================
 # 1. CLOUD DATABASE CONNECTION
 # ==========================================
 get_db_conn <- function() {
@@ -103,7 +105,8 @@ ui <- dashboardPage(
                 box(plotlyOutput("pillar_bar"), width = 6)
               ),
               fluidRow(
-                box(plotlyOutput("sankey_flow"), width = 12)
+                box(plotlyOutput("sankey_flow"), width = 6),
+                box(leafletOutput("deployment"), width = 6)
               )
       ),
       ## Indicators review page
@@ -196,7 +199,7 @@ server <- function(input, output, session) {
   output$funder_bar <- render_funder_bar(funding_data())
   output$pillar_bar <- render_pillar_bar(allocations_data())
   output$sankey_flow <- render_sankey(funding_data(), allocations_data(), activity_data())
-  
+  output$deployment <- render_deployment_map(pie_data)
   
   refresh_trigger <- reactiveVal(0)
   editing_id <- reactiveVal(NULL)
