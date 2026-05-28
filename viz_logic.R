@@ -39,10 +39,6 @@ render_sankey <- function(funding, allocat, activity) {
 }
 
 
-################ Ploting the deployment data
-gs4_deauth()
-url <- "https://docs.google.com/spreadsheets/d/1Qzzqzes9yMyM9d5UD8Es7gbc4oyeKeMyraBs3nqz_gI/edit"
-
 # 1. Import (Your reliable method)
 gs4_deauth()
 url <- "https://docs.google.com/spreadsheets/d/1Qzzqzes9yMyM9d5UD8Es7gbc4oyeKeMyraBs3nqz_gI/edit"
