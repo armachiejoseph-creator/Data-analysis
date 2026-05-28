@@ -106,8 +106,21 @@ ui <- dashboardPage(
                 box(plotlyOutput("pillar_bar"), width = 6)
               ),
               fluidRow(
-                box(plotlyOutput("sankey_flow"), width = 6),
-                box(leafletOutput("deployment"), width = 6)
+                box(
+                  title = "Response funding Flow", 
+                  status = "primary",    # Options: "primary", "info", "success", "warning", "danger"
+                  solidHeader = TRUE,    # Makes the header colored instead of white
+                  plotlyOutput("sankey_flow", height = "400px"), 
+                  width = 6
+                ),
+                #box(plotlyOutput("sankey_flow"), width = 6),
+                box(
+                  title = "Deployment Map by Expertise", 
+                  status = "primary",    # Options: "primary", "info", "success", "warning", "danger"
+                  solidHeader = TRUE,    # Makes the header colored instead of white
+                  leafletOutput("deployment", height = "400px"), 
+                  width = 6
+                )              
               )
       ),
       ## Indicators review page
